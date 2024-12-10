@@ -1,2 +1,1 @@
-# NAMOR; underwater manipulation framework
-Nonlinear Adaptive Model Operating Realtime
+uvms-sim-usage-nodes
