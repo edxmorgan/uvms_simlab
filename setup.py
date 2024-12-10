@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'namor'
+package_name = 'simlab'
 
 setup(
     name=package_name,
@@ -25,9 +25,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'mouse_node_effort = namor.mouse_node_effort:main',
-            'sensor_py_node = namor.sensor:main',
-            'excite_py_node = namor.excite_effort:main',
+            'mouse_node_effort = simlab.mouse_node_effort:main',
+            'sensor_py_node = simlab.sensor:main',
+            'excite_py_node = simlab.excite_effort:main',
         ],
     },
 )

@@ -11,7 +11,7 @@ class ExcitationNode(Node):
         super().__init__('excitation_node',
                           automatically_declare_parameters_from_overrides=True)
         package_share_directory = ament_index_python.get_package_share_directory(
-                'namor')
+                'simlab')
         
         lookup0_eval_path = os.path.join(package_share_directory, 'lookup_function_0.casadi')
         lookup1_eval_path = os.path.join(package_share_directory, 'lookup_function_1.casadi')
