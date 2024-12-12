@@ -116,7 +116,7 @@ class SystemSensor(Node):
         row_data = self.timestamp + self.q + self.dq
 
         # Write the data to the CSV file
-        self.write_data_to_file(row_data)
+        # self.write_data_to_file(row_data)
 
     def get_interface_value(self, window_item, joint_names, interface_names):
         names = window_item.joint_names
