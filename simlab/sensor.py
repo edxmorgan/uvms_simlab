@@ -45,20 +45,9 @@ class SystemSensor(Node):
         self.timestamp = None
         self.efforts = None
 
-        # Create a timestamped filename for the CSV
-        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"joint_data_{timestamp_str}.csv"
-        
-        # Open the CSV file and prepare to write data
-        self.csv_file = open(filename, 'w', newline='')
-        self.csv_writer = csv.writer(self.csv_file)
-        
-        # Write a header row for clarity
-        self.csv_writer.writerow([
-            'timestamp_alpha_axis_e', 'timestamp_alpha_axis_d', 'timestamp_alpha_axis_c', 'timestamp_alpha_axis_b',
-            'q_alpha_axis_e', 'q_alpha_axis_d', 'q_alpha_axis_c', 'q_alpha_axis_b',
-            'dq_alpha_axis_e', 'dq_alpha_axis_d', 'dq_alpha_axis_c', 'dq_alpha_axis_b'
-        ])
+        self.record = True
+
+        self.initiaize_data_writer()
 
     def listener_callback(self, msg: DynamicJointState):
         # Retrieve current joint positions and velocities
@@ -113,10 +102,10 @@ class SystemSensor(Node):
         )
 
         # Compile row data
-        row_data = self.timestamp + self.q + self.dq
+        row_data = self.timestamp + self.q + self.dq + self.efforts
 
         # Write the data to the CSV file
-        # self.write_data_to_file(row_data)
+        self.write_data_to_file(row_data)
 
     def get_interface_value(self, window_item, joint_names, interface_names):
         names = window_item.joint_names
@@ -127,10 +116,29 @@ class SystemSensor(Node):
             for joint_name, interface_name in zip(joint_names, interface_names)
         ]
 
+    def initiaize_data_writer(self):
+        if self.record:
+            # Create a timestamped filename for the CSV
+            timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"joint_data_{timestamp_str}.csv"
+            
+            # Open the CSV file and prepare to write data
+            self.csv_file = open(filename, 'w', newline='')
+            self.csv_writer = csv.writer(self.csv_file)
+            
+            # Write a header row for clarity
+            self.csv_writer.writerow([
+                'timestamp_alpha_axis_e', 'timestamp_alpha_axis_d', 'timestamp_alpha_axis_c', 'timestamp_alpha_axis_b',
+                'q_alpha_axis_e', 'q_alpha_axis_d', 'q_alpha_axis_c', 'q_alpha_axis_b',
+                'dq_alpha_axis_e', 'dq_alpha_axis_d', 'dq_alpha_axis_c', 'dq_alpha_axis_b',
+                'effort_alpha_axis_e', 'effort_alpha_axis_d', 'effort_alpha_axis_c', 'effort_alpha_axis_b'
+            ])
+
     def write_data_to_file(self, row_data):
-        """Write a single row of data to the CSV file."""
-        self.csv_writer.writerow(row_data)
-        self.csv_file.flush()
+        if self.record:
+            """Write a single row of data to the CSV file."""
+            self.csv_writer.writerow(row_data)
+            self.csv_file.flush()
 
     def destroy_node(self):
         # Close the CSV file when the node is destroyed

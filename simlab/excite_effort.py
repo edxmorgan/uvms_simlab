@@ -5,6 +5,7 @@ from uvms_interfaces.msg import Command
 import ament_index_python
 import os
 import casadi as ca
+import time  # Import time module to get system time in seconds
 
 class ExcitationNode(Node):
     def __init__(self):
@@ -28,12 +29,33 @@ class ExcitationNode(Node):
         self.no_efforts = self.get_parameter('no_efforts').value
 
         self.total_no_efforts = self.no_robot * self.no_efforts
-
+        
+        self.start_time = time.time()  # Store the start time for elapsed time calculation
+        self.excitation_duration = self.lkp3_eval(self.start_time)[1].__int__()
+        self.lookup_t0=0
+        self.lookup_t1=0
+        self.lookup_t2=0
+        self.lookup_t3=0
         self.publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', 10)
-        frequency = 150  # Hz
-        self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
+
+        self.timer = self.create_timer(1.0 / 1000, self.timer_callback)
+        self.compute_effort_timer = self.create_timer(1.0 / 200, self.compute_effort_callback)
 
         self.get_logger().info("Excitation node has been initialized.")
+
+
+    def compute_effort_callback(self):
+        # Calculate time_seconds as elapsed time in seconds
+        time_seconds = (time.time() - self.start_time) % self.excitation_duration
+        # self.get_logger().info(f"{time_seconds}")
+        self.lookup_t3 = self.lkp3_eval(time_seconds)[0].__float__()
+
+        self.lookup_t2 = self.lkp2_eval(time_seconds)[0].__float__()
+
+        self.lookup_t1 = self.lkp1_eval(time_seconds)[0].__float__()
+
+        self.lookup_t0 = self.lkp0_eval(time_seconds)[0].__float__()
+
 
 
     def timer_callback(self):
@@ -43,13 +65,13 @@ class ExcitationNode(Node):
 
         real_data = [0.0] * 5
 
-        real_data[3] = 0.0
+        real_data[3] = self.lookup_t3
 
-        real_data[2] = 0.0
+        real_data[2] = self.lookup_t2
 
-        real_data[1] = 0.0
+        real_data[1] = self.lookup_t1
 
-        real_data[0] = 0.0
+        real_data[0] = self.lookup_t0
 
         # Combine the data for all robots
         data = []
@@ -61,11 +83,10 @@ class ExcitationNode(Node):
         other_data = [0.0] * (self.total_no_efforts - len(data))
         data.extend(other_data)
 
-        assert len(data) == self.total_no_efforts, f"Data length mismatch. Expected {self.total_no_efforts}, got {len(data)}"
+        # assert len(data) == self.total_no_efforts, f"Data length mismatch. Expected {self.total_no_efforts}, got {len(data)}"
         # Convert all data to float
         dataF = [float(value) for value in data]
         command_msg.input.data = dataF
-
         # Publish the command
         self.publisher_.publish(command_msg)
 
