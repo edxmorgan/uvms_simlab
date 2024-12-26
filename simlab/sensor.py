@@ -47,7 +47,7 @@ class SystemSensor(Node):
 
         self.record = True
 
-        self.initiaize_data_writer()
+        # self.initiaize_data_writer()
 
     def listener_callback(self, msg: DynamicJointState):
         # Retrieve current joint positions and velocities
