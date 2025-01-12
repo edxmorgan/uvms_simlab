@@ -29,6 +29,7 @@ setup(
             'sensor_py_node = simlab.sensor:main',
             'excite_py_node = simlab.excite_effort:main',
             'visualise_node = simlab.visualise:main',
+            'kf_node = simlab.kalman_filter:main',
         ],
     },
 )
