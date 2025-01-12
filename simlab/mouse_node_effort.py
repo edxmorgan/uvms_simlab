@@ -11,7 +11,6 @@ class SpaceMouse(Node):
         super().__init__('space_mouse_node',
                           automatically_declare_parameters_from_overrides=True)
 
-
         # Get parameter values
         self.no_robot = self.get_parameter('no_robot').value
         self.no_efforts = self.get_parameter('no_efforts').value
@@ -39,22 +38,46 @@ class SpaceMouse(Node):
 
     def on_press(self, key):
         with self.kb_lock:
-            if key == keyboard.Key.up:
-                self.kb_x = 0.8     # Forward
-                self.get_logger().debug("Up Arrow Pressed: Forward")
-            elif key == keyboard.Key.down:
-                self.kb_x = -0.8   # Backward
-                self.get_logger().debug("Down Arrow Pressed: Backward")
-            elif key == keyboard.Key.left:
-                self.kb_y = 0.8    # Left
-                self.get_logger().debug("Left Arrow Pressed: Left")
-            elif key == keyboard.Key.right:
-                self.kb_y = -0.8   # Right
-                self.get_logger().debug("Right Arrow Pressed: Right")
-            elif key == keyboard.Key.space:
-                self.kb_z = 2.5   # Down
-                self.get_logger().debug("Spacebar Pressed: Down")
-            # Ignore other keys
+            try:
+                if key == keyboard.Key.up:
+                    self.kb_x = 0.8     # Forward
+                    self.get_logger().debug("Up Arrow Pressed: Forward")
+                elif key == keyboard.Key.down:
+                    self.kb_x = -0.8   # Backward
+                    self.get_logger().debug("Down Arrow Pressed: Backward")
+                elif key == keyboard.Key.left:
+                    self.kb_y = -0.8    # Left
+                    self.get_logger().debug("Left Arrow Pressed: Left")
+                elif key == keyboard.Key.right:
+                    self.kb_y = 0.8   # Right
+                    self.get_logger().debug("Right Arrow Pressed: Right")
+                elif key == keyboard.Key.space:
+                    self.kb_z = 2.5     # Down
+                    self.get_logger().debug("Spacebar Pressed: Down")
+                # Rotational Controls: W, S, A, D, Q, E
+                elif hasattr(key, 'char') and key.char is not None:
+                    char = key.char.lower()
+                    if char == 'w':
+                        self.kb_pitch = 1.0  # Pitch Up
+                        self.get_logger().debug("Key 'W' Pressed: Pitch Up")
+                    elif char == 's':
+                        self.kb_pitch = -1.0  # Pitch Down
+                        self.get_logger().debug("Key 'S' Pressed: Pitch Down")
+                    elif char == 'd':
+                        self.kb_roll = 1.0  # Roll Left
+                        self.get_logger().debug("Key 'D' Pressed: Roll Left")
+                    elif char == 'a':
+                        self.kb_roll = -1.0  # Roll Right
+                        self.get_logger().debug("Key 'A' Pressed: Roll Right")
+                    elif char == 'q':
+                        self.kb_yaw = 1.0  # Yaw Left
+                        self.get_logger().debug("Key 'Q' Pressed: Yaw Left")
+                    elif char == 'e':
+                        self.kb_yaw = -1.0  # Yaw Right
+                        self.get_logger().debug("Key 'E' Pressed: Yaw Right")
+            except AttributeError:
+                # Handle special keys if necessary
+                pass
 
     def on_release(self, key):
         with self.kb_lock:
@@ -67,6 +90,18 @@ class SpaceMouse(Node):
             elif key == keyboard.Key.space:
                 self.kb_z = 0.0
                 self.get_logger().debug("Spacebar Released: Stop Down")
+            # Rotational Controls Release: W, S, A, D, Q, E
+            elif hasattr(key, 'char') and key.char is not None:
+                char = key.char.lower()
+                if char in ['w', 's']:
+                    self.kb_pitch = 0.0
+                    self.get_logger().debug(f"Key '{char.upper()}' Released: Stop Pitch")
+                elif char in ['a', 'd']:
+                    self.kb_roll = 0.0
+                    self.get_logger().debug(f"Key '{char.upper()}' Released: Stop Roll")
+                elif char in ['q', 'e']:
+                    self.kb_yaw = 0.0
+                    self.get_logger().debug(f"Key '{char.upper()}' Released: Stop Yaw")
             # Ignore other keys
 
     def timer_callback(self):
@@ -75,17 +110,16 @@ class SpaceMouse(Node):
         state = pyspacemouse.read()
         command_msg.command_type = "force"
 
+        # Process SpaceMouse input
         real_data = [0.0] * 5
 
-        if state.buttons == [1, 0]:  # open --> right button
+        if state.buttons == [1, 0]:  # Open --> right button
             real_data[4] = -2
-
-        elif state.buttons == [0, 1]:  # close --> right button
+        elif state.buttons == [0, 1]:  # Close --> right button
             real_data[4] = 2
 
         if state.yaw > 0.0:
             real_data[3] = 2 * state.yaw
-
         elif state.yaw < -0.5:
             real_data[3] = 2 * state.yaw
 
@@ -98,24 +132,42 @@ class SpaceMouse(Node):
         if abs(state.x) > 0.5:
             real_data[0] = 2 * -np.sign(state.x)
 
-        # Combine the data for all robots
-        data = []
-        
-        # Get keyboard-controlled x, y, z
+        # Acquire keyboard-controlled variables
         with self.kb_lock:
             kb_x = self.kb_x
             kb_y = self.kb_y
             kb_z = self.kb_z
+            kb_roll = self.kb_roll
+            kb_pitch = self.kb_pitch
+            kb_yaw = self.kb_yaw
 
-        # Add keyboard-controlled x, y, z, roll, pitch, yaw
-        data.extend([kb_x, kb_y, kb_z, 0.0, 0.0, 0.0])  # 6 elements
+        # Initialize data list
+        data = []
 
-        data.extend(real_data)  # Add real manipulator joint positions (5 elements)
+        # Apply the same commands to all robots
+        for robot_index in range(self.no_robot):
+            # Add keyboard-controlled x, y, z, roll, pitch, yaw
+            data.extend([kb_x, kb_y, kb_z, kb_roll, kb_pitch, kb_yaw])  # 6 elements
 
-        other_data = [0.0] * (self.total_no_efforts - len(data))
-        data.extend(other_data)
+            # Add real_data for manipulator joints (assuming real_data is applicable per robot)
+            data.extend(real_data)  # 5 elements
 
-        assert len(data) == self.total_no_efforts, f"Data length mismatch. Expected {self.total_no_efforts}, got {len(data)}"
+        # Calculate remaining efforts if any
+        current_length = len(data)
+        if current_length < self.total_no_efforts:
+            other_data = [0.0] * (self.total_no_efforts - current_length)
+            data.extend(other_data)
+        elif current_length > self.total_no_efforts:
+            self.get_logger().warning(
+                f"Data length ({current_length}) exceeds total_no_efforts ({self.total_no_efforts}). Truncating data."
+            )
+            data = data[:self.total_no_efforts]
+
+        # Ensure the data length matches
+        assert len(data) == self.total_no_efforts, (
+            f"Data length mismatch. Expected {self.total_no_efforts}, got {len(data)}"
+        )
+
         # Convert all data to float
         dataF = [float(value) for value in data]
         command_msg.input.data = dataF
