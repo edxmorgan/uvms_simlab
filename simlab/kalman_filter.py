@@ -11,13 +11,12 @@ from geometry_msgs.msg import (
     TwistWithCovarianceStamped,
     PoseStamped,
     AccelStamped,
-    PointStamped,  # If you implement position measurements
 )
 from nav_msgs.msg import Odometry
-
-# For time conversions
-from rclpy.time import Time
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from mavros_msgs.msg import Mavlink
+import pymavlink.dialects.v20.standard as mav
+from mavros import mavlink as mavros_mavlink
 
 
 class BlueROVKF(Node):
@@ -26,10 +25,22 @@ class BlueROVKF(Node):
       - 150 Hz timer-based predict/update/publish
       - Adjusted covariance matrices to reduce drift
       - Publishing in both ENU ('map') and NED frames
+      - Optional integration of pressure data for depth estimation
     """
 
     def __init__(self):
         super().__init__('blue_rov_kf')
+        self.target_system = 1
+        self.target_component = 1
+
+        # ------------------------ PARAMETERS -------------------------------
+        # Declare a ROS 2 parameter to enable or disable pressure data
+        self.declare_parameter('use_pressure', False)
+        self.use_pressure_ = self.get_parameter('use_pressure').get_parameter_value().bool_value
+        if self.use_pressure_:
+            self.get_logger().info("*************************************************Pressure data integration is ENABLED.")
+        else:
+            self.get_logger().info("*************************************************Pressure data integration is DISABLED.")
 
         # ------------------------ STATE DEFINITION -------------------------
         # state_ = [x, y, z, roll, pitch, yaw, x_dot, y_dot, z_dot, roll_dot, pitch_dot, yaw_dot]
@@ -110,23 +121,18 @@ class BlueROVKF(Node):
         self.pose_pub_ = self.create_publisher(PoseStamped, '/blue_rov/pose', 10)
         self.accel_pub_ = self.create_publisher(AccelStamped, '/blue_rov/accel', 10)
 
-
         # ------------------------ ROS 2 SUBSCRIPTIONS ----------------------
         qos = QoSProfile(depth=10)
         qos.reliability = ReliabilityPolicy.BEST_EFFORT
 
         self.create_subscription(Imu, '/mavros/imu/data', self.imu_callback, qos)
         self.create_subscription(TwistWithCovarianceStamped, '/dvl/twist', self.dvl_callback, qos)
-        # self.create_subscription(ScaledPressure, '/mavros/imu/scaled_pressure2', self.scaled_pressure_callback, qos)
-
-        # Optional: Position Subscription
-        # self.create_subscription(PointStamped, '/position/data', self.position_callback, qos)
+        self.mavlink_sub = self.create_subscription(Mavlink, '/uas1/mavlink_source', self.mavlink_data_handler, qos)
 
         # Store the latest incoming sensor messages
         self.imu_msg_ = None
         self.dvl_msg_ = None
-        self.scaled_pressure_msg_ = None
-        # self.position_msg_ = None
+        self.scaled_pressure_depth_ = None  # Store depth derived from pressure
 
         # ------------------------ TIMER (150 Hz) -------------------------
         self.timer_period_ = 1.0 / 150.0  # ~0.00667 seconds
@@ -137,6 +143,42 @@ class BlueROVKF(Node):
     # ----------------------------------------------------------------------
     #                          ROS 2 CALLBACKS
     # ----------------------------------------------------------------------
+
+    def mavlink_data_handler(self, mavros_data: Mavlink):
+        mavlink = mav.MAVLink(None, self.target_system, self.target_component)
+        try:
+            mavlink_message = mavlink.parse_char(mavros_mavlink.convert_to_bytes(mavros_data))
+        except Exception as e:
+            self.get_logger().error(f"Failed to parse MAVLink message: {e}")
+            return
+
+        if mavlink_message is None:
+            return
+
+        mavlink_message_dict = mavlink_message.to_dict()
+        msg_id = mavlink_message.get_msgId()
+
+        if msg_id == mav.MAVLINK_MSG_ID_SCALED_PRESSURE2 and self.use_pressure_:
+            # Extract absolute pressure and compute depth
+            press_abs = mavlink_message.press_abs  # in hPa (assuming)
+            depth = self.pressure_to_depth(press_abs)
+            self.scaled_pressure_depth_ = depth
+            self.get_logger().debug(f"Pressure update: press_abs={press_abs} hPa, depth={depth} m")
+
+    def pressure_to_depth(self, press_abs_hpa):
+        """
+        Convert absolute pressure in hPa to depth in meters.
+        """
+        # Convert hPa to Pascals
+        press_abs_pa = press_abs_hpa * 100.0
+        # Calculate depth using the hydrostatic equation:
+        # depth = (press_abs - press_surface) / (water_density * g)
+        # Assuming press_surface is standard atmospheric pressure (101325 Pa)
+        press_surface = 101325.0  # Pa
+        delta_p = press_abs_pa - press_surface
+        depth = delta_p / (self.water_type * 9.80665)  # depth in meters
+        return depth
+
     def imu_callback(self, msg: Imu):
         """
         Store the IMU message for use in the timer callback.
@@ -204,10 +246,10 @@ class BlueROVKF(Node):
             self.update_dvl(self.dvl_msg_)
             self.dvl_msg_ = None
 
-        # Update from Pressure (if implemented)
-        # if self.scaled_pressure_msg_ is not None:
-        #     self.update_pressure(self.scaled_pressure_msg_)
-        #     self.scaled_pressure_msg_ = None
+        # Update from Pressure (if enabled and data available)
+        if self.use_pressure_ and self.scaled_pressure_depth_ is not None:
+            self.update_pressure(self.scaled_pressure_depth_)
+            self.scaled_pressure_depth_ = None
 
         # Update from IMU
         if self.imu_msg_ is not None:
@@ -230,6 +272,7 @@ class BlueROVKF(Node):
         """
         Convert IMU quaternion to roll, pitch, yaw.
         Set angular velocities.
+        Optionally, initialize depth from pressure if enabled and available.
         Mark filter as initialized.
         """
         roll, pitch, yaw = self.quat_to_rpy(
@@ -252,11 +295,19 @@ class BlueROVKF(Node):
         self.state_[10, 0] = imu_msg.angular_velocity.y
         self.state_[11, 0] = imu_msg.angular_velocity.z
 
+        # Optionally, initialize depth from pressure if enabled and data is available
+        if self.use_pressure_ and self.scaled_pressure_depth_ is not None:
+            self.state_[2, 0] = self.scaled_pressure_depth_
+            self.scaled_pressure_depth_ = None  # Clear after initialization
+
         # Store current node time as prev_time_ (for dt computation)
         self.prev_time_ = self.get_clock().now()
         self.is_initialized_ = True
 
-        self.get_logger().info("Kalman Filter initialized from IMU quaternion.")
+        if self.use_pressure_:
+            self.get_logger().info("Kalman Filter initialized with IMU and Pressure data.")
+        else:
+            self.get_logger().info("Kalman Filter initialized with IMU data only.")
 
     def predict(self):
         """
@@ -330,28 +381,24 @@ class BlueROVKF(Node):
 
         self.get_logger().debug("DVL update performed.")
 
-    # def update_pressure(self, scaled_msg: ScaledPressure):
-    #     """
-    #     Update the filter with pressure data.
-    #     Measurement: [z] (depth).
-    #     """
-    #     pressure_abs = scaled_msg.press_abs
-    #     depth = (100.0 * pressure_abs - 101300.0) / (self.water_type * 9.80665)
+    def update_pressure(self, depth_meas: float):
+        """
+        Update the filter with pressure-derived depth data.
+        Measurement: [z] (depth).
+        """
+        z_meas = np.array([[depth_meas]], dtype=float)
+        z_pred = self.H_pressure_ @ self.state_
+        y = z_meas - z_pred  # Innovation
 
-    #     z_meas = np.array([[depth]], dtype=float)
-    #     z_pred = self.H_pressure_ @ self.state_
-    #     y = z_meas - z_pred  # Innovation
+        S = self.H_pressure_ @ self.cov_ @ self.H_pressure_.T + self.R_pressure_
+        K = self.cov_ @ self.H_pressure_.T @ np.linalg.inv(S)
 
-    #     S = self.H_pressure_ @ self.cov_ @ self.H_pressure_.T + self.R_pressure_
-    #     K = self.cov_ @ self.H_pressure_.T @ np.linalg.inv(S)
+        self.state_ += K @ y
+        I = np.eye(12)
+        self.cov_ = (I - K @ self.H_pressure_) @ self.cov_
 
-    #     self.state_ += K @ y
-    #     I = np.eye(12)
-    #     self.cov_ = (I - K @ self.H_pressure_) @ self.cov_
+        self.get_logger().debug("Pressure update performed.")
 
-    #     self.get_logger().debug("Pressure update performed.")
-
-    # Optional: Update from Position Measurements
     # def update_position(self, pos_msg: PointStamped):
     #     """
     #     Update the filter with position data.
