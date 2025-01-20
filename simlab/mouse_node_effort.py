@@ -124,13 +124,13 @@ class SpaceMouse(Node):
             real_data[3] = 0.6*state.yaw
 
         if abs(state.y) > 0.5:
-            real_data[2] = 2 * -np.sign(state.y)
+            real_data[2] = 0.65*-np.sign(state.y)
 
         if abs(state.z) > 0.5:
-            real_data[1] = 2 * -np.sign(state.z)
+            real_data[1] = -np.sign(state.z)
 
         if abs(state.x) > 0.5:
-            real_data[0] = 2 * -np.sign(state.x)
+            real_data[0] = 1.4*-np.sign(state.x)
 
         # Acquire keyboard-controlled variables
         with self.kb_lock:
