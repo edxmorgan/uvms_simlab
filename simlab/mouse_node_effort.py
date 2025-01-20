@@ -119,9 +119,9 @@ class SpaceMouse(Node):
             real_data[4] = 2
 
         if state.yaw > 0.0:
-            real_data[3] = 2 * state.yaw
+            real_data[3] = 0.35*state.yaw
         elif state.yaw < -0.5:
-            real_data[3] = 2 * state.yaw
+            real_data[3] = 0.6*state.yaw
 
         if abs(state.y) > 0.5:
             real_data[2] = 2 * -np.sign(state.y)
