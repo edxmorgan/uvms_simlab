@@ -170,7 +170,7 @@ class SpaceMouse(Node):
 
         # Convert all data to float
         dataF = [float(value) for value in data]
-        command_msg.input.data = dataF
+        command_msg.force.data = dataF
 
         # Publish the command
         self.publisher_.publish(command_msg)
