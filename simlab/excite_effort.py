@@ -91,7 +91,6 @@ class ExcitationNode(Node):
         self.publisher_.publish(command_msg)
 
     def destroy_node(self):
-        self.listener.stop()
         super().destroy_node()
 
 

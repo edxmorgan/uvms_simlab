@@ -2,16 +2,57 @@ import rclpy
 from rclpy.node import Node
 import numpy as np
 from uvms_interfaces.msg import Command
+from control_msgs.msg import DynamicJointState
+
+class Joint_Names:
+    def __init__(self, prefix):
+        self.alpha_axis_a = f'{prefix}_axis_a'
+        self.alpha_axis_b = f'{prefix}_axis_b'
+        self.alpha_axis_c = f'{prefix}_axis_c'
+        self.alpha_axis_d = f'{prefix}_axis_d'
+        self.alpha_axis_e = f'{prefix}_axis_e'
+        self.floating_base = f'{prefix}IOs'
+
+
+class Axis_Interface_names:
+    position = 'position'
+    velocity = 'velocity'
+    sim_time = 'sim_time'
+    effort = 'effort'
+    floating_base_x = 'position.x'
+    floating_base_y = 'position.y'
+    floating_base_z = 'position.z'
+    floating_base_iw = 'orientation.w'
+    floating_base_ix = 'orientation.x'
+    floating_base_iy = 'orientation.y'
+    floating_base_iz = 'orientation.z'
 
 class CoverageTask(Node):
     def __init__(self):
         super().__init__('coverage_task',
                           automatically_declare_parameters_from_overrides=True)
 
+
+        self.subscription = self.create_subscription(
+            DynamicJointState,
+            'dynamic_joint_states',
+            self.listener_callback,
+            10
+        )
+        self.subscription  # prevent unused variable warning
+
+        # self.q = None
+        # self.dq = None
+        # self.ned_T = None
+        # self.timestamp = None
+        # self.efforts = None
+
         # Get parameter values
         self.no_robot = self.get_parameter('no_robot').value
         self.no_efforts = self.get_parameter('no_efforts').value
-
+        self.robots_prefix = self.get_parameter('robots_prefix').value
+        
+        self.get_logger().info(f"robot prefixes found in task node: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
 
         self.publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', 10)
@@ -39,6 +80,67 @@ class CoverageTask(Node):
         # # Publish the command
         # self.publisher_.publish(command_msg)
 
+    def listener_callback(self, msg: DynamicJointState):
+        # Retrieve current joint positions and velocities
+        robot_1_joints = Joint_Names(self.robots_prefix[0])
+        self.q = self.get_interface_value(
+            msg,
+            [robot_1_joints.alpha_axis_e,
+             robot_1_joints.alpha_axis_d,
+             robot_1_joints.alpha_axis_c,
+             robot_1_joints.alpha_axis_b],
+            [Axis_Interface_names.position] * 4
+        )
+
+        self.dq = self.get_interface_value(
+            msg,
+            [robot_1_joints.alpha_axis_e,
+             robot_1_joints.alpha_axis_d,
+             robot_1_joints.alpha_axis_c,
+             robot_1_joints.alpha_axis_b],
+            [Axis_Interface_names.velocity] * 4
+        )
+
+        self.efforts = self.get_interface_value(
+            msg,
+            [robot_1_joints.alpha_axis_e,
+             robot_1_joints.alpha_axis_d,
+             robot_1_joints.alpha_axis_c,
+             robot_1_joints.alpha_axis_b],
+            [Axis_Interface_names.effort] * 4
+        )
+
+        self.timestamp = self.get_interface_value(
+            msg,
+            [robot_1_joints.alpha_axis_e,
+             robot_1_joints.alpha_axis_d,
+             robot_1_joints.alpha_axis_c,
+             robot_1_joints.alpha_axis_b],
+            [Axis_Interface_names.sim_time] * 4
+        )
+
+        self.ned_T = self.get_interface_value(
+            msg,
+            [robot_1_joints.floating_base] * 7,
+            [
+                Axis_Interface_names.floating_base_x,
+                Axis_Interface_names.floating_base_y,
+                Axis_Interface_names.floating_base_z,
+                Axis_Interface_names.floating_base_iw,
+                Axis_Interface_names.floating_base_ix,
+                Axis_Interface_names.floating_base_iy,
+                Axis_Interface_names.floating_base_iz
+            ]
+        )
+
+    def get_interface_value(self, window_item, joint_names, interface_names):
+        names = window_item.joint_names
+        return [
+            window_item.interface_values[names.index(joint_name)].values[
+                window_item.interface_values[names.index(joint_name)].interface_names.index(interface_name)
+            ]
+            for joint_name, interface_name in zip(joint_names, interface_names)
+        ]
 
     def square_velocity_uv_ref(self, t: float,
                             T_side: float = 10.0,
@@ -115,7 +217,6 @@ class CoverageTask(Node):
             return np.array([u, v, w, p, q, r])
     
     def destroy_node(self):
-        self.listener.stop()
         super().destroy_node()
 
 

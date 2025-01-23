@@ -29,7 +29,7 @@ setup(
             'sensor_py_node = simlab.sensor:main',
             'excite_py_node = simlab.excite_effort:main',
             'visualise_node = simlab.visualise:main',
-            'coverage_node = dive_coverage:main'
+            'coverage_node = simlab.dive_coverage:main'
         ],
     },
 )
