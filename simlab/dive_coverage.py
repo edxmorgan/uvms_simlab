@@ -27,13 +27,17 @@ class CoverageTask(Node):
         self.get_logger().info(f"robot prefixes found in task node: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
 
+        self.robots = [Robot(4, prefix) for prefix in self.robots_prefix]
+
         self.publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', 10)
         frequency = 150  # Hz
         self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
         self.get_logger().info("CoverageTask node has been initialized with optimal control.")
 
     def timer_callback(self):
-        command_msg = Command()
+        for robot in self.robots:
+            self.get_logger().info(f"robots state {robot.get_state()}")
+        # command_msg = Command()
         # command_msg.command_type = "optimal"
         # command_msg.pose.data = []
         # command_msg.twist.data = self.square_velocity_uv_ref(t[i], T_side=10.0, speed=0.1, manput=True).tolist()
@@ -53,7 +57,8 @@ class CoverageTask(Node):
         # self.publisher_.publish(command_msg)
 
     def listener_callback(self, msg: DynamicJointState):
-        pass
+        for robot in self.robots:
+            robot.update_state(msg)
 
 
     def destroy_node(self):
