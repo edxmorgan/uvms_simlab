@@ -1,9 +1,17 @@
 import numpy as np
 from typing import Dict
 from control_msgs.msg import DynamicJointState
-
+from scipy.spatial.transform import Rotation as R
 
 class Base:
+    def nano_and_sec_to_sec(self, nanoseconds, seconds):
+        """Converts nanoseconds and seconds to total seconds."""
+        return seconds + (nanoseconds / 1e9)
+        
+    def get_sim_sec(self,  msg: DynamicJointState):
+        total_sec = self.nano_and_sec_to_sec(msg.header.stamp.nanosec, msg.header.stamp.sec)
+        return total_sec
+    
     def get_interface_value(self, msg: DynamicJointState, dof_names: list, interface_names: list):
         names = msg.joint_names
         return [
@@ -33,11 +41,14 @@ class Axis_Interface_names:
     floating_pitch_vel = 'angular_velocity.y'
     floating_yaw_vel = 'angular_velocity.z'
 
+    sim_period = 'sim_period'
+
 class Manipulator(Base):
     def __init__(self, n_joint, prefix):
         self.n_joint = n_joint
         self.q = [0]*n_joint
         self.dq = [0]*n_joint
+        self.sim_period = [0.0]
 
         self.alpha_axis_a = f'{prefix}_axis_a'
         self.alpha_axis_b = f'{prefix}_axis_b'
@@ -63,10 +74,17 @@ class Manipulator(Base):
              self.alpha_axis_b],
             [Axis_Interface_names.velocity] * 4
         )
+
+        self.sim_period = self.get_interface_value(
+            msg,
+            [self.alpha_axis_e],
+            [Axis_Interface_names.sim_period]
+        )
     def get_state(self) -> Dict[str, np.ndarray]:
         return {
             'q':self.q,
-            'dq':self.dq
+            'dq':self.dq,
+            'dt':self.sim_period[0]
         }
 
 
@@ -75,13 +93,16 @@ class Robot(Base):
         self.n_joint = n_joint
         self.floating_base = f'{prefix}IOs'
         self.arm = Manipulator(n_joint, prefix)
-        self.ned_pose = [0] * 7
+        self.ned_pose = [0] * 6
         self.body_vel = [0] * 6
         self.prefix = prefix
+        self.status = 'inactive'
+        self.sim_time = 0.0
+        self.start_time = 0.0
 
     def update_state(self, msg: DynamicJointState):
         self.arm.update_state(msg)
-        self.ned_pose = self.get_interface_value(
+        self.ned_pose_quat = self.get_interface_value(
             msg,
             [self.floating_base] * 7,
             [
@@ -95,6 +116,16 @@ class Robot(Base):
             ]
         )
 
+
+        # Create a Rotation object
+        rotation = R.from_quat([self.ned_pose_quat[4], self.ned_pose_quat[5], self.ned_pose_quat[6], self.ned_pose_quat[3]])  # Note: SciPy uses [x, y, z, w]
+
+        # Convert to Euler angles (roll, pitch, yaw) in radians
+        euler_angles = rotation.as_euler('xyz', degrees=False).tolist()
+
+        self.ned_pose = self.ned_pose_quat[0:3] + euler_angles
+
+
         self.body_vel = self.get_interface_value(
             msg,
             [self.floating_base] * 6,
@@ -107,11 +138,18 @@ class Robot(Base):
                 Axis_Interface_names.floating_yaw_vel
             ]
         )
+        if self.status == 'inactive':
+            self.start_time = self.get_sim_sec(msg)
+            self.status = 'active'
+        elif self.status == 'active':
+            self.sim_time = self.get_sim_sec(msg) - self.start_time
 
     def get_state(self) -> Dict:
         xq = self.arm.get_state()
         xq['name'] = self.prefix
         xq['pose'] = self.ned_pose
         xq['body_vel'] =self.body_vel
+        xq['status'] = self.status
+        xq['sim_time'] = self.sim_time
         return xq
 

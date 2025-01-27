@@ -14,6 +14,8 @@ setup(
         ('share/' + package_name, ['resource/lookup_function_1.casadi']),
         ('share/' + package_name, ['resource/lookup_function_2.casadi']),
         ('share/' + package_name, ['resource/lookup_function_3.casadi']),
+        ('share/' + package_name, ['resource/ref_intg.casadi']),
+        ('share/' + package_name, ['resource/J_uvms.casadi']),
         ('lib/' + package_name, [package_name+'/robot.py']),
         ('lib/' + package_name, [package_name+'/task.py']),
     ],
@@ -30,7 +32,6 @@ setup(
             'mouse_node_effort = simlab.mouse_node_effort:main',
             'sensor_py_node = simlab.sensor:main',
             'excite_py_node = simlab.excite_effort:main',
-            'visualise_node = simlab.visualise:main',
             'coverage_node = simlab.dive_coverage:main'
         ],
     },

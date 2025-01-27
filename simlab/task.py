@@ -1,11 +1,12 @@
 import numpy as np
 
 class Task:
-    def square_velocity_uv_ref(self, t: float,
+
+    @staticmethod
+    def square_velocity_uv_ref(node, t: float,
                             T_side: float = 10.0,
                             speed: float = 0.1,
-                            manput: bool = False,
-                            ops: bool = False) -> np.ndarray:
+                            manput: bool = False) -> np.ndarray:
         """
         Generate a velocity reference that traces a square in the XY-plane.
 
@@ -42,35 +43,33 @@ class Task:
         
         # Repeat the motion every 'period' seconds
         t_mod = t % period
+        # node.get_logger().info(f"ref path period {t_mod}")
 
         # Determine which side (leg) of the square we are on
         if t_mod < T_side:
             # Leg 1: move along +x
             u, v = speed, 0.0
-            dq0, dq1, dq2, dq3 = 0.1, -0.1, 0.1, -0.1
+            dq0, dq1, dq2, dq3, dq4 = 0.1, -0.1, 0.1, -0.1, 0.0
         elif t_mod < 2 * T_side:
             # Leg 2: move along +y
             u, v = 0.0, speed
-            dq0, dq1, dq2, dq3 = -0.1, 0.1, -0.2, 0.1
+            dq0, dq1, dq2, dq3, dq4  = -0.1, 0.1, -0.2, 0.1, 0.0
         elif t_mod < 3 * T_side:
             # Leg 3: move along -x
             u, v = -speed, 0.0
-            dq0, dq1, dq2, dq3 = 0.1, -0.1, 0.14, -0.1
+            dq0, dq1, dq2, dq3, dq4  = 0.1, -0.1, 0.14, -0.1, 0.0
         else:
             # Leg 4: move along -y
             u, v = 0.0, -speed
-            dq0, dq1, dq2, dq3 = -0.1, 0.1, -0.1, 0.01
+            dq0, dq1, dq2, dq3, dq4  = -0.1, 0.1, -0.1, 0.01, 0.0
 
         # Zero out the other velocity components
         w, p, q, r = 0.0, 0.0, 0.0, 0.0
-        
-        if ops:
-            # Return 6-element array
-            return np.array([u, v, w, p, q, r])
+
         # Return the desired output format
         if manput:
             # Return 10-element array (extra zeros at the end)
-            return np.array([u, v, w, p, q, r, dq0, dq1, dq2, dq3])
+            return np.array([u, v, w, p, q, r, dq0, dq1, dq2, dq3, dq4])
         else:
             # Return 6-element array
-            return np.array([u, v, w, p, q, r])
+            return np.array([u, v, w, p, q, r, 0.0, 0.0, 0.0, 0.0, 0.0])
