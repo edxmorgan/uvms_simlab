@@ -48,6 +48,7 @@ class CoverageTask(Node):
         self.ref_pos = np.array([3.0, 0.0, 5.0, 0,0,0, 3.1, 0.7, 0.4, 2.1, 0.0])
 
         self.path_publisher = self.create_publisher(Path, '/Path', 10)
+        self.trajectory_path_publisher = self.create_publisher(Path, '/TrajectoryPath', 10)
         self.uvms_publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', 10)
 
         frequency = 150  # Hz
@@ -56,6 +57,8 @@ class CoverageTask(Node):
 
         # Initialize path poses
         self.path_poses = []
+        self.traj_path_poses = []
+
         self.trajectory_twist = []
         self.trajectory_poses = []
         self.MAX_POSES = 10000
@@ -97,6 +100,26 @@ class CoverageTask(Node):
             if len(self.path_poses) > self.MAX_POSES:
                 self.path_poses.pop(0)
             self.path_publisher.publish(path_msg)
+
+
+            # Publish the robot trajectory path to RViz
+            tra_path_msg = Path()
+            tra_path_msg.header.stamp = self.get_clock().now().to_msg()
+            tra_path_msg.header.frame_id = f"{self.robots[0].prefix}map"  # Set to your appropriate frame
+
+            # Create PoseStamped from ref_pos
+            traj_pose = PoseStamped()
+            traj_pose.header = tra_path_msg.header
+            traj_pose.pose.position.x = float(states[0]['pose'][0])
+            traj_pose.pose.position.y = -float(states[0]['pose'][1])
+            traj_pose.pose.position.z = -float(states[0]['pose'][2])
+            traj_pose.pose.orientation.w = 1.0  # No rotation
+
+            # Accumulate poses
+            self.traj_path_poses.append(traj_pose)
+            tra_path_msg.poses = self.traj_path_poses
+
+            self.trajectory_path_publisher.publish(tra_path_msg)
 
             # Accumulate reference trajectory
             self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
