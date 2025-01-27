@@ -2,6 +2,13 @@ import numpy as np
 from typing import Dict
 from control_msgs.msg import DynamicJointState
 from scipy.spatial.transform import Rotation as R
+import ament_index_python
+import os
+import casadi as ca
+from nav_msgs.msg import Path
+from rclpy.node import Node
+from geometry_msgs.msg import PoseStamped
+from rclpy.qos import QoSProfile, QoSHistoryPolicy
 
 class Base:
     def nano_and_sec_to_sec(self, nanoseconds, seconds):
@@ -89,7 +96,17 @@ class Manipulator(Base):
 
 
 class Robot(Base):
-    def __init__(self, n_joint, prefix):
+    def __init__(self, node: Node, n_joint, prefix):
+
+        package_share_directory = ament_index_python.get_package_share_directory(
+                'simlab')
+        ref_intg_path = os.path.join(package_share_directory, 'ref_intg.casadi')
+        j_uvms_path = os.path.join(package_share_directory, 'J_uvms.casadi')
+
+        self.ref_intg_eval = ca.Function.load(ref_intg_path)
+        self.J_uvms = ca.Function.load(j_uvms_path) # ned tf
+        self.node = node
+
         self.n_joint = n_joint
         self.floating_base = f'{prefix}IOs'
         self.arm = Manipulator(n_joint, prefix)
@@ -99,6 +116,27 @@ class Robot(Base):
         self.status = 'inactive'
         self.sim_time = 0.0
         self.start_time = 0.0
+
+        qos_profile = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        self.path_publisher = self.node.create_publisher(Path, f'/{self.prefix}Path', qos_profile)
+        self.trajectory_path_publisher = self.node.create_publisher(Path, f'/{self.prefix}TrajectoryPath', qos_profile)
+
+        self.ref_acc = np.zeros(11)
+        self.ref_vel = np.zeros(11)
+        self.ref_pos = np.array([3.0, 0.0, 5.0, 0,0,0, 3.1, 0.7, 0.4, 2.1, 0.0])
+
+       # Initialize path poses
+        self.path_poses = []
+        self.traj_path_poses = []
+
+        self.MAX_POSES = 10000
+
+        # robot trajectory
+        self.trajectory_twist = []
+        self.trajectory_poses = []
 
     def update_state(self, msg: DynamicJointState):
         self.arm.update_state(msg)
@@ -153,3 +191,96 @@ class Robot(Base):
         xq['sim_time'] = self.sim_time
         return xq
 
+    def to_ned_velocity(self, desired_body_vel):
+        J_UVMS_REF = self.J_uvms(self.ref_pos[3:6])
+        J_UVMS_REF_np = J_UVMS_REF.full()
+        v_ned_ref = J_UVMS_REF_np@desired_body_vel[:-1]
+        return v_ned_ref
+    
+    def integrate_vel_trajectory(self, desired_body_vel):
+        dt = self.get_state()['dt']
+        self.ned_vel = self.to_ned_velocity(desired_body_vel)
+        self.ref_pos = self.ref_intg_eval(self.ref_pos[:-1], self.ned_vel, dt).full().flatten().tolist() + [0.0]
+
+    def set_robot_goals(self, desired_body_vel):
+        self.ref_vel = desired_body_vel.copy()
+        self.integrate_vel_trajectory(desired_body_vel.copy())
+
+        # Accumulate reference trajectory
+        self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
+        self.trajectory_poses.append(self.ref_pos.copy())
+
+        # self.orient_towards_velocity()
+
+        self.goal = dict()
+        self.goal['ref_acc'] = self.ref_acc.tolist()
+        self.goal['ref_vel'] = self.trajectory_twist[0]
+        self.goal['ref_pos'] = self.trajectory_poses[0]
+
+    def get_robot_goals(self, ref_type):
+        return self.goal.get(ref_type)
+
+    def publish_reference_path(self):
+        # Publish the reference path to RViz
+        path_msg = Path()
+        path_msg.header.stamp = self.node.get_clock().now().to_msg()
+        path_msg.header.frame_id = f"{self.prefix}map"  # Set to robot map frame
+
+        # Create PoseStamped from ref_pos
+        pose = PoseStamped()
+        pose.header = path_msg.header
+        pose.pose.position.x = float(self.ref_pos[0])
+        pose.pose.position.y = -float(self.ref_pos[1])
+        pose.pose.position.z = -float(self.ref_pos[2])
+        pose.pose.orientation.w = 1.0  # No rotation
+
+        # Accumulate poses
+        self.path_poses.append(pose)
+        path_msg.poses = self.path_poses
+
+        # Limit the number of poses
+        if len(self.path_poses) > self.MAX_POSES:
+            self.path_poses.pop(0)
+        self.path_publisher.publish(path_msg)
+
+    def publish_robot_path(self):
+        # Publish the robot trajectory path to RViz
+        tra_path_msg = Path()
+        tra_path_msg.header.stamp = self.node.get_clock().now().to_msg()
+        tra_path_msg.header.frame_id = f"{self.prefix}map"  # Set to your appropriate frame
+
+        # Create PoseStamped from ref_pos
+        traj_pose = PoseStamped()
+        traj_pose.header = tra_path_msg.header
+        traj_pose.pose.position.x = float(self.ned_pose[0])
+        traj_pose.pose.position.y = -float(self.ned_pose[1])
+        traj_pose.pose.position.z = -float(self.ned_pose[2])
+        traj_pose.pose.orientation.w = 1.0  # No rotation
+
+        # Accumulate poses
+        self.traj_path_poses.append(traj_pose)
+        tra_path_msg.poses = self.traj_path_poses
+
+        self.trajectory_path_publisher.publish(tra_path_msg)
+
+    def orient_towards_velocity(self):
+        """
+        Orient the robot to face the direction of its current positive velocity.
+        This updates the robot's reference orientation based on its body velocity.
+        """
+        vx = self.ned_vel[0]
+        vy = self.ned_vel[1]
+
+        # Compute the magnitude of the horizontal velocity
+        horizontal_speed = np.hypot(vx, vy)
+
+        # Threshold to avoid undefined behavior when velocity is near zero
+        velocity_threshold = 1e-3
+
+        if horizontal_speed > velocity_threshold:
+            # Calculate desired yaw angle (rotation around Z-axis)
+            desired_yaw = np.arctan2(vy, vx)  # Yaw angle in radians
+
+            # self.trajectory_poses[-1][5] = desired_yaw
+
+            self.node.get_logger().info(f"Orienting towards velocity: yaw={desired_yaw} radians")
