@@ -58,7 +58,7 @@ class CoverageTask(Node):
             if state['status']=='active':
                 sim_t = state['sim_time']
 
-                ref_body_vel = Task.square_velocity_uv_ref(self, t=sim_t, T_side=100.0, speed=0.1, manput=False).flatten() #task
+                ref_body_vel = Task.square_velocity_uv_ref(self, t=sim_t, T_side=50.0, speed=0.1, manput=False).flatten() #task
 
                 robot.set_robot_goals(ref_body_vel)
                 robot.publish_reference_path()

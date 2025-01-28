@@ -9,6 +9,8 @@ from nav_msgs.msg import Path
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from rclpy.qos import QoSProfile, QoSHistoryPolicy
+import csv
+from datetime import datetime
 
 class Base:
     def nano_and_sec_to_sec(self, nanoseconds, seconds):
@@ -33,17 +35,19 @@ class Axis_Interface_names:
     velocity = 'velocity'
     sim_time = 'sim_time'
     effort = 'effort'
+    
     floating_base_x = 'position.x'
     floating_base_y = 'position.y'
     floating_base_z = 'position.z'
-    floating_base_iw = 'orientation.w'
-    floating_base_ix = 'orientation.x'
-    floating_base_iy = 'orientation.y'
-    floating_base_iz = 'orientation.z'
+
+    floating_base_roll = 'roll'
+    floating_base_pitch = 'pitch'
+    floating_base_yaw = 'yaw'
 
     floating_dx = 'velocity.x'
     floating_dy = 'velocity.y'
     floating_dz = 'velocity.z'
+
     floating_roll_vel = 'angular_velocity.x'
     floating_pitch_vel = 'angular_velocity.y'
     floating_yaw_vel = 'angular_velocity.z'
@@ -138,31 +142,24 @@ class Robot(Base):
         self.trajectory_twist = []
         self.trajectory_poses = []
 
+        self.record = False
+
+        self.initiaize_data_writer()
+
     def update_state(self, msg: DynamicJointState):
         self.arm.update_state(msg)
-        self.ned_pose_quat = self.get_interface_value(
+        self.ned_pose = self.get_interface_value(
             msg,
-            [self.floating_base] * 7,
+            [self.floating_base] * 6,
             [
                 Axis_Interface_names.floating_base_x,
                 Axis_Interface_names.floating_base_y,
                 Axis_Interface_names.floating_base_z,
-                Axis_Interface_names.floating_base_iw,
-                Axis_Interface_names.floating_base_ix,
-                Axis_Interface_names.floating_base_iy,
-                Axis_Interface_names.floating_base_iz
+                Axis_Interface_names.floating_base_roll,
+                Axis_Interface_names.floating_base_pitch,
+                Axis_Interface_names.floating_base_yaw
             ]
         )
-
-
-        # Create a Rotation object
-        rotation = R.from_quat([self.ned_pose_quat[4], self.ned_pose_quat[5], self.ned_pose_quat[6], self.ned_pose_quat[3]])  # Note: SciPy uses [x, y, z, w]
-
-        # Convert to Euler angles (roll, pitch, yaw) in radians
-        euler_angles = rotation.as_euler('xyz', degrees=False).tolist()
-
-        self.ned_pose = self.ned_pose_quat[0:3] + euler_angles
-
 
         self.body_vel = self.get_interface_value(
             msg,
@@ -210,7 +207,7 @@ class Robot(Base):
         self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
         self.trajectory_poses.append(self.ref_pos.copy())
 
-        # self.orient_towards_velocity()
+        self.orient_towards_velocity()
 
         self.goal = dict()
         self.goal['ref_acc'] = self.ref_acc.tolist()
@@ -272,15 +269,48 @@ class Robot(Base):
         vy = self.ned_vel[1]
 
         # Compute the magnitude of the horizontal velocity
-        horizontal_speed = np.hypot(vx, vy)
+        horizontal_speed = np.hypot(vx, -vy)
 
         # Threshold to avoid undefined behavior when velocity is near zero
         velocity_threshold = 1e-3
 
         if horizontal_speed > velocity_threshold:
             # Calculate desired yaw angle (rotation around Z-axis)
-            desired_yaw = np.arctan2(vy, vx)  # Yaw angle in radians
+            desired_yaw = np.arctan2(-vy, vx)  # Yaw angle in radians
 
             # self.trajectory_poses[-1][5] = desired_yaw
 
             self.node.get_logger().info(f"Orienting towards velocity: yaw={desired_yaw} radians")
+
+
+    def initiaize_data_writer(self):
+            if self.record:
+                # Create a timestamped filename for the CSV
+                timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"joint_data_{timestamp_str}.csv"
+                
+                # Open the CSV file and prepare to write data
+                self.csv_file = open(filename, 'w', newline='')
+                self.csv_writer = csv.writer(self.csv_file)
+                
+                # Write a header row for clarity
+                columns = [
+                    'timestamp',
+                    'base_x', 'base_y', 'base_z', 'base_roll', 'base_pitch', 'base_yaw',
+                    'base_dx', 'base_dy', 'base_dz', 'base_vel_roll', 'base_vel_pitch', 'base_vel_yaw',
+                    'base_x_force', 'base_y_force', 'base_z_force', 'base_x_torque', 'base_y_torque', 'base_z_torque',
+                    'q_alpha_axis_e', 'q_alpha_axis_d', 'q_alpha_axis_c', 'q_alpha_axis_b',
+                    'dq_alpha_axis_e', 'dq_alpha_axis_d', 'dq_alpha_axis_c', 'dq_alpha_axis_b',
+                    'effort_alpha_axis_e', 'effort_alpha_axis_d', 'effort_alpha_axis_c', 'effort_alpha_axis_b'
+                ]
+                self.csv_writer.writerow(columns)
+
+    def write_data_to_file(self, row_data):
+        if self.record:
+            """Write a single row of data to the CSV file."""
+            self.csv_writer.writerow(row_data)
+            self.csv_file.flush()
+
+    def close_csv(self):
+        # Close the CSV file when the node is destroyed
+        self.csv_file.close()
