@@ -287,7 +287,7 @@ class Robot(Base):
 
             self.trajectory_poses[-1][5] = adjusted_yaw
 
-            self.node.get_logger().info(f"Orienting towards velocity:current yaw={current_yaw} radians  desired yaw={desired_yaw} radians adjusted yaw={adjusted_yaw} radians")
+            # self.node.get_logger().info(f"Orienting towards velocity:current yaw={current_yaw} radians  desired yaw={desired_yaw} radians adjusted yaw={adjusted_yaw} radians")
 
 
     def adjust_desired_yaw(self, desired_yaw, current_yaw):
