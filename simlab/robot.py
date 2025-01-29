@@ -199,16 +199,16 @@ class Robot(Base):
         self.ned_vel = self.to_ned_velocity(desired_body_vel)
         self.ref_pos = self.ref_intg_eval(self.ref_pos[:-1], self.ned_vel, dt).full().flatten().tolist() + [0.0]
 
-    def set_robot_goals(self, desired_body_vel):
-        self.ref_vel = desired_body_vel.copy()
-        self.integrate_vel_trajectory(desired_body_vel.copy())
+    def set_robot_goals(self, future_desired_body_vel):
+        self.ref_vel = future_desired_body_vel.copy()
+        self.integrate_vel_trajectory(future_desired_body_vel.copy())
 
         # Accumulate reference trajectory
         self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
         self.trajectory_poses.append(self.ref_pos.copy())
 
         self.orient_towards_velocity()
-
+        
         self.goal = dict()
         self.goal['ref_acc'] = self.ref_acc.tolist()
         self.goal['ref_vel'] = self.trajectory_twist[0]
@@ -269,20 +269,40 @@ class Robot(Base):
         vy = self.ned_vel[1]
 
         # Compute the magnitude of the horizontal velocity
-        horizontal_speed = np.hypot(vx, -vy)
+        horizontal_speed = np.hypot(vx, vy)
 
         # Threshold to avoid undefined behavior when velocity is near zero
         velocity_threshold = 1e-3
 
         if horizontal_speed > velocity_threshold:
-            # Calculate desired yaw angle (rotation around Z-axis)
-            desired_yaw = np.arctan2(-vy, vx)  # Yaw angle in radians
+            desired_yaw = np.arctan2(vy, vx)
 
-            # self.trajectory_poses[-1][5] = desired_yaw
+            # -- Get the CURRENT yaw from the last pose in trajectory_poses
+            if len(self.trajectory_poses)>1:
+                current_yaw = self.trajectory_poses[-2][5]
+            else:
+                current_yaw = self.trajectory_poses[-1][5]
+            # -- Compute the shortest-path yaw
+            adjusted_yaw = self.adjust_desired_yaw(desired_yaw, current_yaw)
 
-            self.node.get_logger().info(f"Orienting towards velocity: yaw={desired_yaw} radians")
+            self.trajectory_poses[-1][5] = adjusted_yaw
+
+            self.node.get_logger().info(f"Orienting towards velocity:current yaw={current_yaw} radians  desired yaw={desired_yaw} radians adjusted yaw={adjusted_yaw} radians")
 
 
+    def adjust_desired_yaw(self, desired_yaw, current_yaw):
+            # Compute the smallest angular difference
+        angle_diff = desired_yaw - current_yaw
+        angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi  # Normalize to (-π, π)
+
+        # Adjust desired_yaw to ensure the shortest rotation path
+        adjusted_desired_yaw = current_yaw + angle_diff
+
+        # # Normalize the adjusted desired yaw to [0, 2π)
+        # adjusted_desired_yaw = adjusted_desired_yaw % (2 * np.pi)
+
+        return adjusted_desired_yaw
+    
     def initiaize_data_writer(self):
             if self.record:
                 # Create a timestamped filename for the CSV

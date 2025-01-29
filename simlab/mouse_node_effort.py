@@ -40,16 +40,16 @@ class SpaceMouse(Node):
         with self.kb_lock:
             try:
                 if key == keyboard.Key.up:
-                    self.kb_x = 0.3     # Forward
+                    self.kb_x = 0.5     # Forward
                     self.get_logger().debug("Up Arrow Pressed: Forward")
                 elif key == keyboard.Key.down:
-                    self.kb_x = -0.3   # Backward
+                    self.kb_x = -0.5   # Backward
                     self.get_logger().debug("Down Arrow Pressed: Backward")
                 elif key == keyboard.Key.left:
-                    self.kb_y = -0.3    # Left
+                    self.kb_y = -0.5    # Left
                     self.get_logger().debug("Left Arrow Pressed: Left")
                 elif key == keyboard.Key.right:
-                    self.kb_y = 0.3   # Right
+                    self.kb_y = 0.5   # Right
                     self.get_logger().debug("Right Arrow Pressed: Right")
                 elif key == keyboard.Key.space:
                     self.kb_z = 2.3     # Down
@@ -58,22 +58,22 @@ class SpaceMouse(Node):
                 elif hasattr(key, 'char') and key.char is not None:
                     char = key.char.lower()
                     if char == 'w':
-                        self.kb_pitch = 0.1  # Pitch Up
+                        self.kb_pitch = -0.5  # Pitch Up
                         self.get_logger().debug("Key 'W' Pressed: Pitch Up")
                     elif char == 's':
-                        self.kb_pitch = -0.1  # Pitch Down
+                        self.kb_pitch = 0.5  # Pitch Down
                         self.get_logger().debug("Key 'S' Pressed: Pitch Down")
                     elif char == 'd':
-                        self.kb_roll = 0.1  # Roll Left
+                        self.kb_roll = 0.5  # Roll Left
                         self.get_logger().debug("Key 'D' Pressed: Roll Left")
                     elif char == 'a':
-                        self.kb_roll = -0.1  # Roll Right
+                        self.kb_roll = -0.5  # Roll Right
                         self.get_logger().debug("Key 'A' Pressed: Roll Right")
                     elif char == 'q':
-                        self.kb_yaw = 0.1  # Yaw Left
+                        self.kb_yaw = -0.5  # Yaw Left
                         self.get_logger().debug("Key 'Q' Pressed: Yaw Left")
                     elif char == 'e':
-                        self.kb_yaw = -0.1  # Yaw Right
+                        self.kb_yaw = 0.5  # Yaw Right
                         self.get_logger().debug("Key 'E' Pressed: Yaw Right")
             except AttributeError:
                 # Handle special keys if necessary
