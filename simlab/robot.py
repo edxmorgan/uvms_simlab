@@ -105,10 +105,14 @@ class Robot(Base):
         package_share_directory = ament_index_python.get_package_share_directory(
                 'simlab')
         ref_intg_path = os.path.join(package_share_directory, 'ref_intg.casadi')
+        ops_ref_intg_path = os.path.join(package_share_directory, 'ops_twist_integrator.casadi')
         j_uvms_path = os.path.join(package_share_directory, 'J_uvms.casadi')
+        diff_iK_path = os.path.join(package_share_directory, 'diff_iK.casadi')
 
         self.ref_intg_eval = ca.Function.load(ref_intg_path)
+        self.ops_ref_intg_eval = ca.Function.load(ops_ref_intg_path)
         self.J_uvms = ca.Function.load(j_uvms_path) # ned tf
+        self.diff_iK = ca.Function.load(diff_iK_path) # differential inverse kinematics
         self.node = node
 
         self.n_joint = n_joint
@@ -120,6 +124,13 @@ class Robot(Base):
         self.status = 'inactive'
         self.sim_time = 0.0
         self.start_time = 0.0
+
+ 
+        self.uvms_ll = [-1000, -1000, 0.0, -np.pi/6, -np.pi/6, -1000, 1, 0.01, 0.01, 0.01]
+        self.uvms_ul = [ 1000, 1000, 1000, np.pi/6, np.pi/6, 1000, 5.50, 3.40, 3.40, 5.70]
+        self.k0 = [1,1,1 , 1,1,1, 1,1,1,1]
+        self.base_To = [3.142, 0.0, 0.0, 0.14, 0.0, -0.12]
+
 
         qos_profile = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -199,6 +210,25 @@ class Robot(Base):
         dt = self.get_state()['dt']
         self.ned_vel = self.to_ned_velocity(desired_body_vel)
         self.ref_pos = self.ref_intg_eval(self.ref_pos[:-1], self.ned_vel, dt).full().flatten().tolist() + [0.0]
+
+
+    def set_operation_space_goals(self, future_desired_body_vel, delay=True):
+        robot_configuration = self.get_state()['pose'] + self.get_state()['q']
+        data = np.zeros((11,))
+        desired_generalized_vel = self.diff_iK(future_desired_body_vel,
+                                    robot_configuration,
+                                    self.uvms_ul,
+                                    self.uvms_ll,
+                                    self.k0,
+                                    self.base_To
+                                    ).full()
+        data[0:10] = desired_generalized_vel.flatten()
+
+        # self.node.get_logger().info(f"diff IK data={data}")
+
+
+        self.set_robot_goals(data, delay)
+        
 
     def set_robot_goals(self, future_desired_body_vel, delay=True):
         self.ref_vel = future_desired_body_vel.copy()

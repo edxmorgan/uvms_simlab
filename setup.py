@@ -10,12 +10,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name, ['resource/lookup_function_0.casadi']),
-        ('share/' + package_name, ['resource/lookup_function_1.casadi']),
-        ('share/' + package_name, ['resource/lookup_function_2.casadi']),
-        ('share/' + package_name, ['resource/lookup_function_3.casadi']),
         ('share/' + package_name, ['resource/ref_intg.casadi']),
         ('share/' + package_name, ['resource/J_uvms.casadi']),
+        ('share/' + package_name, ['resource/diff_iK.casadi']),
+        ('share/' + package_name, ['resource/ops_twist_integrator.casadi']),
         ('lib/' + package_name, [package_name+'/robot.py']),
         ('lib/' + package_name, [package_name+'/task.py']),
         ('lib/' + package_name, [package_name+'/shape_task.py']),
@@ -35,7 +33,9 @@ setup(
             'excite_py_node = simlab.excite_effort:main',
             'coverage_node = simlab.dive_coverage:main',
             'shape_formation_node = simlab.shape_formation:main',
-            'station_node = simlab.station:main'
+            'station_node = simlab.station:main',
+            'uvms_ops_node = simlab.uvms_ops:main',
+
         ],
     },
 )
