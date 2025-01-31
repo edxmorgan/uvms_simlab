@@ -186,6 +186,7 @@ class Robot(Base):
         xq['body_vel'] =self.body_vel
         xq['status'] = self.status
         xq['sim_time'] = self.sim_time
+        xq['prefix'] = self.prefix
         return xq
 
     def to_ned_velocity(self, desired_body_vel):
@@ -199,7 +200,7 @@ class Robot(Base):
         self.ned_vel = self.to_ned_velocity(desired_body_vel)
         self.ref_pos = self.ref_intg_eval(self.ref_pos[:-1], self.ned_vel, dt).full().flatten().tolist() + [0.0]
 
-    def set_robot_goals(self, future_desired_body_vel):
+    def set_robot_goals(self, future_desired_body_vel, delay=True):
         self.ref_vel = future_desired_body_vel.copy()
         self.integrate_vel_trajectory(future_desired_body_vel.copy())
 
@@ -208,11 +209,16 @@ class Robot(Base):
         self.trajectory_poses.append(self.ref_pos.copy())
 
         self.orient_towards_velocity()
+
+        if delay:
+            t_i = 0
+        else:
+            t_i = -1
         
         self.goal = dict()
         self.goal['ref_acc'] = self.ref_acc.tolist()
-        self.goal['ref_vel'] = self.trajectory_twist[0]
-        self.goal['ref_pos'] = self.trajectory_poses[0]
+        self.goal['ref_vel'] = self.trajectory_twist[t_i]
+        self.goal['ref_pos'] = self.trajectory_poses[t_i]
 
     def get_robot_goals(self, ref_type):
         return self.goal.get(ref_type)

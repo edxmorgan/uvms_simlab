@@ -18,6 +18,7 @@ setup(
         ('share/' + package_name, ['resource/J_uvms.casadi']),
         ('lib/' + package_name, [package_name+'/robot.py']),
         ('lib/' + package_name, [package_name+'/task.py']),
+        ('lib/' + package_name, [package_name+'/shape_task.py']),
     ],
 
     install_requires=['setuptools'],
@@ -32,7 +33,9 @@ setup(
             'mouse_node_effort = simlab.mouse_node_effort:main',
             'sensor_py_node = simlab.sensor:main',
             'excite_py_node = simlab.excite_effort:main',
-            'coverage_node = simlab.dive_coverage:main'
+            'coverage_node = simlab.dive_coverage:main',
+            'shape_formation_node = simlab.shape_formation:main',
+            'station_node = simlab.station:main'
         ],
     },
 )
