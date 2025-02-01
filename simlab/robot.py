@@ -55,7 +55,8 @@ class Axis_Interface_names:
     sim_period = 'sim_period'
 
 class Manipulator(Base):
-    def __init__(self, n_joint, prefix):
+    def __init__(self, node: Node, n_joint, prefix):
+        self.node = node
         self.n_joint = n_joint
         self.q = [0]*n_joint
         self.dq = [0]*n_joint
@@ -66,6 +67,21 @@ class Manipulator(Base):
         self.alpha_axis_c = f'{prefix}_axis_c'
         self.alpha_axis_d = f'{prefix}_axis_d'
         self.alpha_axis_e = f'{prefix}_axis_e'
+
+        self.a0 = 20e-3
+        self.a1 = np.sqrt(40**2 + (154.3)**2)*(10**-3)
+        self.a2 = 20e-3
+        self.a3 = 0
+        self.a4 = 0
+        
+        self.d0 = 46.2e-3
+        self.d1 = 0
+        self.d2 = 0
+        self.d3 = -180e-3
+        self.d4 = 0
+        
+        self.l1 = self.a1
+        self.l2 = np.sqrt(self.a2**2 + self.d3**2)
 
     def update_state(self, msg: DynamicJointState):
         self.q = self.get_interface_value(
@@ -98,6 +114,34 @@ class Manipulator(Base):
             'dt':self.sim_period[0]
         }
 
+    def ik_solver(self, target_position ,pose="underarm"):
+        x = target_position[0]
+        y = target_position[1]
+        z = target_position[2]
+
+        thet0 , thet1, thet2 = float("nan"), float("nan"), float("nan")
+        try:
+            R = np.sqrt(x**2 + y**2)
+            l1 = self.a1
+            l2 = np.sqrt(self.a2**2 + self.d3**2)
+
+            if pose == 'underarm':
+                thet0 = np.arctan2(y , x) + np.pi
+                l3 = np.sqrt((R - self.a0)**2 + (z -self.d0)**2)
+                thet2 = np.arccos((l1**2 + l2**2 - l3**2)/(2*l1*l2)) - np.arcsin((2*self.a2)/l1) - np.arcsin(self.a2/l2)
+                thet1 = (np.pi/2) + np.arctan2(z - self.d0, R-self.a0) - np.arccos((l1**2 + l3**2 - l2**2)/(2*l1*l3)) - np.arcsin(((2*self.a2)/l1))
+
+            if pose == 'overarm':
+                thet0 = np.arctan2(y , x)
+                l3 = np.sqrt((R + self.a0)**2 + (z - self.d0)**2)
+                thet2 = np.arccos((l1**2 + l2**2 - l3**2)/(2*l1*l2)) - np.arcsin((2*self.a2)/l1) - np.arcsin(self.a2/l2)
+                thet1 = ((3*np.pi)/2) - np.arctan2(z - self.d0, R+self.a0) - np.arccos((l1**2 + l3**2 - l2**2)/(2*l1*l3)) - np.arcsin(((2*self.a2)/l1))
+            
+        except RuntimeWarning as e:
+            self.node.get_logger().error(f"Warning: {e}")
+        except Exception as e:
+            self.node.get_logger().error(f"An error occurred: {e}")
+        return thet0 , thet1, thet2
 
 class Robot(Base):
     def __init__(self, node: Node, n_joint, prefix):
@@ -108,16 +152,18 @@ class Robot(Base):
         ops_ref_intg_path = os.path.join(package_share_directory, 'ops_twist_integrator.casadi')
         j_uvms_path = os.path.join(package_share_directory, 'J_uvms.casadi')
         diff_iK_path = os.path.join(package_share_directory, 'diff_iK.casadi')
+        fk_path = os.path.join(package_share_directory, 'fk_eval.casadi')
 
         self.ref_intg_eval = ca.Function.load(ref_intg_path)
         self.ops_ref_intg_eval = ca.Function.load(ops_ref_intg_path)
         self.J_uvms = ca.Function.load(j_uvms_path) # ned tf
         self.diff_iK = ca.Function.load(diff_iK_path) # differential inverse kinematics
+        self.fk_eval = ca.Function.load(fk_path) # differential inverse kinematics
         self.node = node
 
         self.n_joint = n_joint
         self.floating_base = f'{prefix}IOs'
-        self.arm = Manipulator(n_joint, prefix)
+        self.arm = Manipulator(node, n_joint, prefix)
         self.ned_pose = [0] * 6
         self.body_vel = [0] * 6
         self.prefix = prefix
@@ -139,19 +185,32 @@ class Robot(Base):
         self.path_publisher = self.node.create_publisher(Path, f'/{self.prefix}Path', qos_profile)
         self.trajectory_path_publisher = self.node.create_publisher(Path, f'/{self.prefix}TrajectoryPath', qos_profile)
 
+        self.path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}OpsPath', qos_profile)
+        self.trajectory_path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}OpsTrajectoryPath', qos_profile)
+
         self.ref_acc = np.zeros(11)
         self.ref_vel = np.zeros(11)
         self.ref_pos = np.array([3.0, 0.0, 5.0, 0,0,0, 3.1, 0.7, 0.4, 2.1, 0.0])
 
+        self.ops_ref_pos = self.fk_eval(self.ref_pos.tolist()[0:10],  self.base_To)
+
+        self.node.get_logger().info(f"Initial ref ops pose={self.ops_ref_pos} ")
+
        # Initialize path poses
         self.path_poses = []
         self.traj_path_poses = []
+
+        self.path_ops_poses = []
+        self.traj_path__ops_poses = []
+
 
         self.MAX_POSES = 10000
 
         # robot trajectory
         self.trajectory_twist = []
         self.trajectory_poses = []
+        self.trajectory_ops_twist = []
+        self.trajectory_ops_poses = []
 
         self.record = False
 
@@ -212,8 +271,15 @@ class Robot(Base):
         self.ref_pos = self.ref_intg_eval(self.ref_pos[:-1], self.ned_vel, dt).full().flatten().tolist() + [0.0]
 
 
+    # def integrate_ops_vel_trajectory(self, desired_ops_vel):
+    #     dt = self.get_state()['dt']
+    #     self.ops_ref_pos = self.ops_ref_intg_eval(self.ops_ref_pos, desired_ops_vel, dt).full().flatten().tolist()
+        # self.node.get_logger().info(f"ops_ref_pos={self.ops_ref_pos}")
+
     def set_operation_space_goals(self, future_desired_body_vel, delay=True):
+        # self.integrate_ops_vel_trajectory(future_desired_body_vel)
         robot_configuration = self.get_state()['pose'] + self.get_state()['q']
+
         data = np.zeros((11,))
         desired_generalized_vel = self.diff_iK(future_desired_body_vel,
                                     robot_configuration,
@@ -224,8 +290,9 @@ class Robot(Base):
                                     ).full()
         data[0:10] = desired_generalized_vel.flatten()
 
-        # self.node.get_logger().info(f"diff IK data={data}")
 
+
+        # self.node.get_logger().info(f"diff IK data={data}")
 
         self.set_robot_goals(data, delay)
         
@@ -233,10 +300,13 @@ class Robot(Base):
     def set_robot_goals(self, future_desired_body_vel, delay=True):
         self.ref_vel = future_desired_body_vel.copy()
         self.integrate_vel_trajectory(future_desired_body_vel.copy())
-
+        self.ops_ref_pos = self.fk_eval(self.ref_pos[0:10],  self.base_To).full().flatten().tolist()
         # Accumulate reference trajectory
         self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
         self.trajectory_poses.append(self.ref_pos.copy())
+
+       # Accumulate ops reference trajectory
+        self.trajectory_ops_poses.append(self.ops_ref_pos.copy())
 
         self.orient_towards_velocity()
 
@@ -252,6 +322,29 @@ class Robot(Base):
 
     def get_robot_goals(self, ref_type):
         return self.goal.get(ref_type)
+
+    def publish_ops_reference_path(self):
+        # Publish the reference path to RViz
+        path_msg = Path()
+        path_msg.header.stamp = self.node.get_clock().now().to_msg()
+        path_msg.header.frame_id = f"{self.prefix}map"  # Set to robot map frame
+
+        # Create PoseStamped from ref_pos
+        pose = PoseStamped()
+        pose.header = path_msg.header
+        pose.pose.position.x = float(self.ops_ref_pos[0])
+        pose.pose.position.y = -float(self.ops_ref_pos[1])
+        pose.pose.position.z = -float(self.ops_ref_pos[2])
+        pose.pose.orientation.w = 1.0  # No rotation
+
+        # Accumulate poses
+        self.path_ops_poses.append(pose)
+        path_msg.poses = self.path_ops_poses
+
+        # Limit the number of poses
+        if len(self.path_ops_poses) > self.MAX_POSES:
+            self.path_ops_poses.pop(0)
+        self.path_ops_publisher.publish(path_msg)
 
     def publish_reference_path(self):
         # Publish the reference path to RViz

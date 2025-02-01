@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name, ['resource/J_uvms.casadi']),
         ('share/' + package_name, ['resource/diff_iK.casadi']),
         ('share/' + package_name, ['resource/ops_twist_integrator.casadi']),
+        ('share/' + package_name, ['resource/fk_eval.casadi']),
         ('lib/' + package_name, [package_name+'/robot.py']),
         ('lib/' + package_name, [package_name+'/task.py']),
         ('lib/' + package_name, [package_name+'/shape_task.py']),
@@ -35,7 +36,7 @@ setup(
             'shape_formation_node = simlab.shape_formation:main',
             'station_node = simlab.station:main',
             'uvms_ops_node = simlab.uvms_ops:main',
-
+            'ik_solve_node = simlab.ik_solve:main'
         ],
     },
 )

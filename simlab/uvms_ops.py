@@ -58,10 +58,11 @@ class OperationalSpace(Node):
             if state['status']=='active':
                 sim_t = state['sim_time']
 
-                ref_body_vel = Task.square_velocity_ops_ref(self, t=sim_t, T_side=50.0, speed=0.2).tolist() #task
+                ref_body_vel = Task.square_velocity_ops_ref(self, t=sim_t, T_side=50.0, speed=0.5).tolist() #task
 
                 robot.set_operation_space_goals(ref_body_vel, True)
                 robot.publish_reference_path()
+                robot.publish_ops_reference_path()
                 robot.publish_robot_path()
 
                 command_msg.acceleration.data.extend(robot.get_robot_goals('ref_acc'))

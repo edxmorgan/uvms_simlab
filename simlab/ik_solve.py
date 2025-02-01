@@ -8,9 +8,9 @@ from task import Task
 from rclpy.qos import QoSProfile, QoSHistoryPolicy
 
 
-class CoverageTask(Node):
+class iKtask(Node):
     def __init__(self):
-        super().__init__('coverage_task',
+        super().__init__('iK_task',
                           automatically_declare_parameters_from_overrides=True)
 
 
@@ -30,7 +30,7 @@ class CoverageTask(Node):
         self.get_logger().info(f"robot prefixes found in task node: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"robots total number of commands : {self.total_no_efforts}")
-
+        self.waypoint = np.array([[0,-1,0],[0,0,0],[0,0,1],[1,0,0], [0.5,0.5,0]]).T
         self.robots = [Robot(self, 4, prefix) for prefix in self.robots_prefix]
 
 
@@ -53,24 +53,17 @@ class CoverageTask(Node):
         command_msg.twist.data = []
         command_msg.pose.data = []
 
-        for robot in self.robots:
+        for i, robot in enumerate(self.robots):
             state = robot.get_state()
             if state['status']=='active':
-                sim_t = state['sim_time']
-
-                ref_body_vel = Task.square_velocity_uv_ref(self, t=sim_t, T_side=50.0, speed=0.6, manput=False).flatten() #task
-                # self.get_logger().info(f'task {ref_body_vel.shape}')
-                robot.set_robot_goals(ref_body_vel)
-                robot.publish_reference_path()
                 robot.publish_robot_path()
-
-                command_msg.acceleration.data.extend(robot.get_robot_goals('ref_acc'))
-                command_msg.twist.data.extend(robot.get_robot_goals('ref_vel'))
-                command_msg.pose.data.extend(robot.get_robot_goals('ref_pos'))
-
-                if len(robot.trajectory_twist) > 500:
-                    robot.trajectory_twist.pop(0)
-                    robot.trajectory_poses.pop(0)
+                x= self.waypoint[0,i]
+                y =self.waypoint[1,i]
+                z =self.waypoint[2,i]
+                thet0 , thet1, thet2 = robot.arm.ik_solver([x,y,z])
+                command_msg.acceleration.data.extend([0,0,0 ,0,0,0, 0,0,0,0,0])
+                command_msg.twist.data.extend([0,0,0 ,0,0,0, 0,0,0,0,0])
+                command_msg.pose.data.extend([0,0,0 ,0,0,0, thet0, thet1, thet2, 2.1, 0])
                 
         # Publish the command
         self.uvms_publisher_.publish(command_msg)
@@ -88,14 +81,14 @@ class CoverageTask(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    coveragetask = CoverageTask()
+    iktask = iKtask()
 
     try:
-        rclpy.spin(coveragetask)
+        rclpy.spin(iktask)
     except KeyboardInterrupt:
-        coveragetask.get_logger().info('CoverageTask node stopped by KeyboardInterrupt.')
+        iktask.get_logger().info('iktask node stopped by KeyboardInterrupt.')
     finally:
-        coveragetask.destroy_node()
+        iktask.destroy_node()
         rclpy.shutdown()
 
 if __name__ == '__main__':
