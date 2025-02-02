@@ -11,6 +11,7 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.qos import QoSProfile, QoSHistoryPolicy
 import csv
 from datetime import datetime
+import random
 
 class Base:
     def nano_and_sec_to_sec(self, nanoseconds, seconds):
@@ -61,12 +62,13 @@ class Manipulator(Base):
         self.q = [0]*n_joint
         self.dq = [0]*n_joint
         self.sim_period = [0.0]
-
+        self.effort = [0]*n_joint
         self.alpha_axis_a = f'{prefix}_axis_a'
         self.alpha_axis_b = f'{prefix}_axis_b'
         self.alpha_axis_c = f'{prefix}_axis_c'
         self.alpha_axis_d = f'{prefix}_axis_d'
         self.alpha_axis_e = f'{prefix}_axis_e'
+
 
         self.a0 = 20e-3
         self.a1 = np.sqrt(40**2 + (154.3)**2)*(10**-3)
@@ -82,6 +84,17 @@ class Manipulator(Base):
         
         self.l1 = self.a1
         self.l2 = np.sqrt(self.a2**2 + self.d3**2)
+
+        self.task_Space_Box ={'x_min': -0.05772180470827806, 'x_max': 0.03015406093747365,
+                          'y_min': -0.06853860224338981, 'y_max': 0.057466988088834825,
+                            'z_min': -0.2216507997959984, 'z_max': 0.3100041333006747}
+
+    def generate_random_point(self):
+        x = random.uniform(self.task_Space_Box['x_min'], self.task_Space_Box['x_max'])
+        y = random.uniform(self.task_Space_Box['y_min'], self.task_Space_Box['y_max'])
+        z = random.uniform(self.task_Space_Box['z_min'], self.task_Space_Box['z_max'])
+        return (x, y, z)
+
 
     def update_state(self, msg: DynamicJointState):
         self.q = self.get_interface_value(
@@ -102,6 +115,16 @@ class Manipulator(Base):
             [Axis_Interface_names.velocity] * 4
         )
 
+        self.effort = self.get_interface_value(
+            msg,
+            [self.alpha_axis_e,
+             self.alpha_axis_d,
+             self.alpha_axis_c,
+             self.alpha_axis_b],
+            [Axis_Interface_names.effort] * 4
+        )
+
+
         self.sim_period = self.get_interface_value(
             msg,
             [self.alpha_axis_e],
@@ -109,42 +132,65 @@ class Manipulator(Base):
         )
     def get_state(self) -> Dict[str, np.ndarray]:
         return {
+            'arm_effort':self.effort,
             'q':self.q,
             'dq':self.dq,
             'dt':self.sim_period[0]
         }
 
-    def ik_solver(self, target_position ,pose="underarm"):
+    def ik_solver(self, target_position, pose="underarm"):
         x = target_position[0]
         y = target_position[1]
         z = target_position[2]
 
-        thet0 , thet1, thet2 = float("nan"), float("nan"), float("nan")
+        thet0, thet1, thet2 = float("nan"), float("nan"), float("nan")
         try:
             R = np.sqrt(x**2 + y**2)
             l1 = self.a1
             l2 = np.sqrt(self.a2**2 + self.d3**2)
 
             if pose == 'underarm':
-                thet0 = np.arctan2(y , x) + np.pi
-                l3 = np.sqrt((R - self.a0)**2 + (z -self.d0)**2)
-                thet2 = np.arccos((l1**2 + l2**2 - l3**2)/(2*l1*l2)) - np.arcsin((2*self.a2)/l1) - np.arcsin(self.a2/l2)
-                thet1 = (np.pi/2) + np.arctan2(z - self.d0, R-self.a0) - np.arccos((l1**2 + l3**2 - l2**2)/(2*l1*l3)) - np.arcsin(((2*self.a2)/l1))
+                thet0 = np.arctan2(y, x) + np.pi
+                l3 = np.sqrt((R - self.a0)**2 + (z - self.d0)**2)
+                
+                # Compute argument for arccos and arcsin safely by clipping
+                arg1 = (l1**2 + l2**2 - l3**2) / (2 * l1 * l2)
+                term1 = np.arccos(np.clip(arg1, -1, 1))
+                
+                term2 = np.arcsin(np.clip((2 * self.a2) / l1, -1, 1))
+                term3 = np.arcsin(np.clip(self.a2 / l2, -1, 1))
+                
+                thet2 = term1 - term2 - term3
 
-            if pose == 'overarm':
-                thet0 = np.arctan2(y , x)
+                arg2 = (l1**2 + l3**2 - l2**2) / (2 * l1 * l3)
+                term4 = np.arccos(np.clip(arg2, -1, 1))
+                
+                thet1 = (np.pi / 2) + np.arctan2(z - self.d0, R - self.a0) - term4 - term2
+
+            elif pose == 'overarm':
+                thet0 = np.arctan2(y, x)
                 l3 = np.sqrt((R + self.a0)**2 + (z - self.d0)**2)
-                thet2 = np.arccos((l1**2 + l2**2 - l3**2)/(2*l1*l2)) - np.arcsin((2*self.a2)/l1) - np.arcsin(self.a2/l2)
-                thet1 = ((3*np.pi)/2) - np.arctan2(z - self.d0, R+self.a0) - np.arccos((l1**2 + l3**2 - l2**2)/(2*l1*l3)) - np.arcsin(((2*self.a2)/l1))
-            
-        except RuntimeWarning as e:
-            self.node.get_logger().error(f"Warning: {e}")
+                
+                arg1 = (l1**2 + l2**2 - l3**2) / (2 * l1 * l2)
+                term1 = np.arccos(np.clip(arg1, -1, 1))
+                
+                term2 = np.arcsin(np.clip((2 * self.a2) / l1, -1, 1))
+                term3 = np.arcsin(np.clip(self.a2 / l2, -1, 1))
+                
+                thet2 = term1 - term2 - term3
+
+                arg2 = (l1**2 + l3**2 - l2**2) / (2 * l1 * l3)
+                term4 = np.arccos(np.clip(arg2, -1, 1))
+                
+                thet1 = ((3 * np.pi) / 2) - np.arctan2(z - self.d0, R + self.a0) - term4 - term2
+
         except Exception as e:
             self.node.get_logger().error(f"An error occurred: {e}")
-        return thet0 , thet1, thet2
+        return thet0, thet1, thet2
+
 
 class Robot(Base):
-    def __init__(self, node: Node, n_joint, prefix):
+    def __init__(self, node: Node, n_joint, prefix, record=False):
 
         package_share_directory = ament_index_python.get_package_share_directory(
                 'simlab')
@@ -212,7 +258,7 @@ class Robot(Base):
         self.trajectory_ops_twist = []
         self.trajectory_ops_poses = []
 
-        self.record = False
+        self.record = record
 
         self.initiaize_data_writer()
 
@@ -436,7 +482,7 @@ class Robot(Base):
             if self.record:
                 # Create a timestamped filename for the CSV
                 timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-                filename = f"joint_data_{timestamp_str}.csv"
+                filename = f"{timestamp_str}_{self.prefix}.csv"
                 
                 # Open the CSV file and prepare to write data
                 self.csv_file = open(filename, 'w', newline='')
@@ -445,17 +491,26 @@ class Robot(Base):
                 # Write a header row for clarity
                 columns = [
                     'timestamp',
-                    'base_x', 'base_y', 'base_z', 'base_roll', 'base_pitch', 'base_yaw',
-                    'base_dx', 'base_dy', 'base_dz', 'base_vel_roll', 'base_vel_pitch', 'base_vel_yaw',
-                    'base_x_force', 'base_y_force', 'base_z_force', 'base_x_torque', 'base_y_torque', 'base_z_torque',
+                    # 'base_x_force', 'base_y_force', 'base_z_force', 'base_x_torque', 'base_y_torque', 'base_z_torque',
+                    # 'base_x', 'base_y', 'base_z', 'base_roll', 'base_pitch', 'base_yaw',
+                    # 'base_dx', 'base_dy', 'base_dz', 'base_vel_roll', 'base_vel_pitch', 'base_vel_yaw',
+
+                    'effort_alpha_axis_e', 'effort_alpha_axis_d', 'effort_alpha_axis_c', 'effort_alpha_axis_b'
                     'q_alpha_axis_e', 'q_alpha_axis_d', 'q_alpha_axis_c', 'q_alpha_axis_b',
                     'dq_alpha_axis_e', 'dq_alpha_axis_d', 'dq_alpha_axis_c', 'dq_alpha_axis_b',
-                    'effort_alpha_axis_e', 'effort_alpha_axis_d', 'effort_alpha_axis_c', 'effort_alpha_axis_b'
                 ]
                 self.csv_writer.writerow(columns)
 
-    def write_data_to_file(self, row_data):
+    def write_data_to_file(self):
         if self.record:
+            row_data = []
+            info = self.get_state()
+        
+            row_data.extend([info['sim_time']])
+            row_data.extend(info['arm_effort'])
+            row_data.extend(info['q'])
+            row_data.extend(info['dq'])
+            
             """Write a single row of data to the CSV file."""
             self.csv_writer.writerow(row_data)
             self.csv_file.flush()

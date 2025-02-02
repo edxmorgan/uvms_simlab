@@ -6,7 +6,7 @@ from control_msgs.msg import DynamicJointState
 from robot import Robot
 from task import Task
 from rclpy.qos import QoSProfile, QoSHistoryPolicy
-
+import random
 
 class iKtask(Node):
     def __init__(self):
@@ -31,8 +31,11 @@ class iKtask(Node):
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"robots total number of commands : {self.total_no_efforts}")
         self.waypoint = np.array([[0,-1,0],[0,0,0],[0,0,1],[1,0,0], [0.5,0.5,0]]).T
-        self.robots = [Robot(self, 4, prefix) for prefix in self.robots_prefix]
+        self.robots = [Robot(self, 4, prefix, True) for prefix in self.robots_prefix]
 
+        self.loop_count = 0
+
+        self.cached_point = None
 
         qos_profile = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -53,21 +56,31 @@ class iKtask(Node):
         command_msg.twist.data = []
         command_msg.pose.data = []
 
+        # Increase the loop counter
+        self.loop_count += 1
+
         for i, robot in enumerate(self.robots):
             state = robot.get_state()
+            robot.write_data_to_file()
             if state['status']=='active':
                 robot.publish_robot_path()
-                x= self.waypoint[0,i]
-                y =self.waypoint[1,i]
-                z =self.waypoint[2,i]
-                thet0 , thet1, thet2 = robot.arm.ik_solver([x,y,z])
+
+                if self.loop_count % 100 == 0 or self.cached_point is None:
+                    self.cached_point = robot.arm.generate_random_point()
+                    self.thet3 = random.uniform(1.0,  5.70)
+                (x, y, z) = self.cached_point
+                
+                self.thet0 , self.thet1, self.thet2 = robot.arm.ik_solver([x,y,z])
+                if self.thet0 == float("nan") or self.thet1 == float("nan") or self.thet3 == float("nan"):
+                    self.loop_count == 0
+                    return
+
                 command_msg.acceleration.data.extend([0,0,0 ,0,0,0, 0,0,0,0,0])
                 command_msg.twist.data.extend([0,0,0 ,0,0,0, 0,0,0,0,0])
-                command_msg.pose.data.extend([0,0,0 ,0,0,0, thet0, thet1, thet2, 2.1, 0])
-                
+                command_msg.pose.data.extend([0,0,0 ,0,0,0, self.thet0, self.thet1, self.thet2, self.thet3, 0])
+
         # Publish the command
         self.uvms_publisher_.publish(command_msg)
-
 
 
     def listener_callback(self, msg: DynamicJointState):
@@ -76,6 +89,8 @@ class iKtask(Node):
 
 
     def destroy_node(self):
+        for i, robot in enumerate(self.robots):
+            robot.close_csv()
         super().destroy_node()
 
 
