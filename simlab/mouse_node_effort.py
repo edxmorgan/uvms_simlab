@@ -118,19 +118,33 @@ class SpaceMouse(Node):
         elif state.buttons == [0, 1]:  # Close --> right button
             real_data[4] = 2
 
+        # if state.yaw > 0.0:
+        #     real_data[3] = 0.35*state.yaw
+        # elif state.yaw < -0.5:
+        #     real_data[3] = 0.6*state.yaw
+
+        # if abs(state.y) > 0.5:
+        #     real_data[2] = 0.65*-np.sign(state.y)
+
+        # if abs(state.z) > 0.5:
+        #     real_data[1] = -np.sign(state.z)
+
+        # if abs(state.x) > 0.5:
+        #     real_data[0] = 2.0*-np.sign(state.x)
+
         if state.yaw > 0.0:
-            real_data[3] = 0.35*state.yaw
+            real_data[3] = 5*state.yaw
         elif state.yaw < -0.5:
-            real_data[3] = 0.6*state.yaw
+            real_data[3] = 5*state.yaw
 
         if abs(state.y) > 0.5:
-            real_data[2] = 0.65*-np.sign(state.y)
+            real_data[2] = 5*-np.sign(state.y)
 
         if abs(state.z) > 0.5:
-            real_data[1] = -np.sign(state.z)
+            real_data[1] = -5*np.sign(state.z)
 
         if abs(state.x) > 0.5:
-            real_data[0] = 2.0*-np.sign(state.x)
+            real_data[0] = 5*-np.sign(state.x)
 
         # Acquire keyboard-controlled variables
         with self.kb_lock:
