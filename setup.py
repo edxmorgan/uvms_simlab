@@ -36,7 +36,8 @@ setup(
             'shape_formation_node = simlab.shape_formation:main',
             'station_node = simlab.station:main',
             'uvms_ops_node = simlab.uvms_ops:main',
-            'ik_solve_node = simlab.ik_solve:main'
+            'ik_solve_node = simlab.ik_solve:main',
+            'pwm_test_node = simlab.pwm_test:main'
         ],
     },
 )
