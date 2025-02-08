@@ -5,6 +5,8 @@ import numpy as np
 from uvms_interfaces.msg import Command
 from pynput import keyboard
 import threading
+from robot import Robot
+from rclpy.qos import QoSProfile, QoSHistoryPolicy
 
 class SpaceMouse(Node):
     def __init__(self):
@@ -14,11 +16,22 @@ class SpaceMouse(Node):
         # Get parameter values
         self.no_robot = self.get_parameter('no_robot').value
         self.no_efforts = self.get_parameter('no_efforts').value
-
+        self.robots_prefix = self.get_parameter('robots_prefix').value
+        
+        self.get_logger().info(f"robot prefixes found in task node: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
+        self.get_logger().info(f"robots total number of commands : {self.total_no_efforts}")
 
-        self.publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', 10)
-        frequency = 150  # Hz
+        self.robots = [Robot(self, 4, prefix) for prefix in self.robots_prefix]
+
+
+        qos_profile = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
+        self.publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', qos_profile)
+        frequency = 1000  # Hz
         self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
 
         # Initialize keyboard-controlled variables
@@ -52,7 +65,7 @@ class SpaceMouse(Node):
                     self.kb_y = 10   # Right
                     self.get_logger().debug("Right Arrow Pressed: Right")
                 elif key == keyboard.Key.space:
-                    self.kb_z = 10     # Down
+                    self.kb_z = 20     # Down
                     self.get_logger().debug("Spacebar Pressed: Down")
                 # Rotational Controls: W, S, A, D, Q, E
                 elif hasattr(key, 'char') and key.char is not None:
@@ -118,33 +131,33 @@ class SpaceMouse(Node):
         elif state.buttons == [0, 1]:  # Close --> right button
             real_data[4] = 2
 
-        # if state.yaw > 0.0:
-        #     real_data[3] = 0.35*state.yaw
-        # elif state.yaw < -0.5:
-        #     real_data[3] = 0.6*state.yaw
-
-        # if abs(state.y) > 0.5:
-        #     real_data[2] = 0.65*-np.sign(state.y)
-
-        # if abs(state.z) > 0.5:
-        #     real_data[1] = -np.sign(state.z)
-
-        # if abs(state.x) > 0.5:
-        #     real_data[0] = 2.0*-np.sign(state.x)
-
         if state.yaw > 0.0:
-            real_data[3] = 5*state.yaw
+            real_data[3] = 0.35*state.yaw
         elif state.yaw < -0.5:
-            real_data[3] = 5*state.yaw
+            real_data[3] = 0.6*state.yaw
 
         if abs(state.y) > 0.5:
-            real_data[2] = 5*-np.sign(state.y)
+            real_data[2] = 0.65*-np.sign(state.y)
 
         if abs(state.z) > 0.5:
-            real_data[1] = -5*np.sign(state.z)
+            real_data[1] = -np.sign(state.z)
 
         if abs(state.x) > 0.5:
-            real_data[0] = 5*-np.sign(state.x)
+            real_data[0] = 2.0*-np.sign(state.x)
+
+        # if state.yaw > 0.0:
+        #     real_data[3] = 5*state.yaw
+        # elif state.yaw < -0.5:
+        #     real_data[3] = 5*state.yaw
+
+        # if abs(state.y) > 0.5:
+        #     real_data[2] = 5*-np.sign(state.y)
+
+        # if abs(state.z) > 0.5:
+        #     real_data[1] = -5*np.sign(state.z)
+
+        # if abs(state.x) > 0.5:
+        #     real_data[0] = 5*-np.sign(state.x)
 
         # Acquire keyboard-controlled variables
         with self.kb_lock:
@@ -159,7 +172,8 @@ class SpaceMouse(Node):
         data = []
 
         # Apply the same commands to all robots
-        for robot_index in range(self.no_robot):
+        for robot_index, robot in enumerate(self.robots):
+            robot.publish_robot_path()
             # Add keyboard-controlled x, y, z, roll, pitch, yaw
             data.extend([kb_x, kb_y, kb_z, kb_roll, kb_pitch, kb_yaw])  # 6 elements
 
