@@ -480,14 +480,21 @@ class Robot(Base):
     
     def initiaize_data_writer(self):
             if self.record:
-                # Create a timestamped filename for the CSV
+                # Create a timestamp string
                 timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+                
+                # Create a folder with the timestamp as its name (in the current working directory)
+                folder_path = os.path.join(os.getcwd(), timestamp_str)
+                os.makedirs(folder_path, exist_ok=True)
+                
+                # Create a timestamped filename for the CSV
                 filename = f"{timestamp_str}_{self.prefix}.csv"
+                file_path = os.path.join(folder_path, filename)
                 
                 # Open the CSV file and prepare to write data
-                self.csv_file = open(filename, 'w', newline='')
+                self.csv_file = open(file_path, 'w', newline='')
                 self.csv_writer = csv.writer(self.csv_file)
-                
+
                 # Write a header row for clarity
                 columns = [
                     'timestamp',
@@ -495,13 +502,14 @@ class Robot(Base):
                     # 'base_x', 'base_y', 'base_z', 'base_roll', 'base_pitch', 'base_yaw',
                     # 'base_dx', 'base_dy', 'base_dz', 'base_vel_roll', 'base_vel_pitch', 'base_vel_yaw',
 
-                    'effort_alpha_axis_e', 'effort_alpha_axis_d', 'effort_alpha_axis_c', 'effort_alpha_axis_b'
+                    'effort_alpha_axis_e', 'effort_alpha_axis_d', 'effort_alpha_axis_c', 'effort_alpha_axis_b',
                     'q_alpha_axis_e', 'q_alpha_axis_d', 'q_alpha_axis_c', 'q_alpha_axis_b',
                     'dq_alpha_axis_e', 'dq_alpha_axis_d', 'dq_alpha_axis_c', 'dq_alpha_axis_b',
+                    'q_alpha_axis_e_ref', 'q_alpha_axis_d_ref', 'q_alpha_axis_c_ref', 'q_alpha_axis_b_ref',
                 ]
                 self.csv_writer.writerow(columns)
 
-    def write_data_to_file(self):
+    def write_data_to_file(self, ref):
         if self.record:
             row_data = []
             info = self.get_state()
@@ -510,7 +518,8 @@ class Robot(Base):
             row_data.extend(info['arm_effort'])
             row_data.extend(info['q'])
             row_data.extend(info['dq'])
-            
+            row_data.extend(ref)
+
             """Write a single row of data to the CSV file."""
             self.csv_writer.writerow(row_data)
             self.csv_file.flush()

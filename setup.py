@@ -37,7 +37,8 @@ setup(
             'station_node = simlab.station:main',
             'uvms_ops_node = simlab.uvms_ops:main',
             'ik_solve_node = simlab.ik_solve:main',
-            'pwm_test_node = simlab.pwm_test:main'
+            'pwm_test_node = simlab.pwm_test:main',
+            'pid_metrics_node = simlab.pid_metrics:main'
         ],
     },
 )
