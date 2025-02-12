@@ -34,7 +34,7 @@ class ShapeFormationTask(Node):
         self.robots = [Robot(self, 4, prefix) for prefix in self.robots_prefix]
 
         self.shape_formation = ShapeFormationController(0.1*np.ones((3,len(self.robots))))
-        self.waypoint = np.array([[0,1,0],[0,0,0],[0,0,1],[1,0,0], [0.5,0.5,0]]).T
+        self.waypoint = np.array([[0,1,0],[0,0,0],[0,0,1],[1,0,0],[0.5,0.5,1]]).T
 
         qos_profile = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -82,8 +82,8 @@ class ShapeFormationTask(Node):
                     robot.trajectory_twist.pop(0)
                     robot.trajectory_poses.pop(0)
 
-        # Publish the command
-        self.uvms_publisher_.publish(command_msg)
+        # # Publish the command
+        # self.uvms_publisher_.publish(command_msg)
 
     def listener_callback(self, msg: DynamicJointState):
         for robot in self.robots:

@@ -22,7 +22,8 @@ class SpaceMouse(Node):
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"robots total number of commands : {self.total_no_efforts}")
 
-        self.robots = [Robot(self, 4, prefix) for prefix in self.robots_prefix]
+        initial_pos = np.array([0.0, 0.0, 0.0, 0,0,0, 3.1, 0.7, 0.4, 2.1])
+        self.robots = [Robot(self, 4, prefix, initial_pos) for prefix in self.robots_prefix]
 
 
         qos_profile = QoSProfile(

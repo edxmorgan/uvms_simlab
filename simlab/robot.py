@@ -190,7 +190,7 @@ class Manipulator(Base):
 
 
 class Robot(Base):
-    def __init__(self, node: Node, n_joint, prefix, record=False):
+    def __init__(self, node: Node, n_joint, prefix, initial_pos, record=False):
 
         package_share_directory = ament_index_python.get_package_share_directory(
                 'simlab')
@@ -202,7 +202,7 @@ class Robot(Base):
 
         self.ref_intg_eval = ca.Function.load(ref_intg_path)
         self.ops_ref_intg_eval = ca.Function.load(ops_ref_intg_path)
-        self.J_uvms = ca.Function.load(j_uvms_path) # ned tf
+        self.J_uvms = ca.Function.load(j_uvms_path) # body to ned tf
         self.diff_iK = ca.Function.load(diff_iK_path) # differential inverse kinematics
         self.fk_eval = ca.Function.load(fk_path) # differential inverse kinematics
         self.node = node
@@ -228,19 +228,18 @@ class Robot(Base):
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=10
         )
-        self.path_publisher = self.node.create_publisher(Path, f'/{self.prefix}Path', qos_profile)
-        self.trajectory_path_publisher = self.node.create_publisher(Path, f'/{self.prefix}TrajectoryPath', qos_profile)
+        self.path_publisher = self.node.create_publisher(Path, f'/{self.prefix}desiredPath', qos_profile)
+        self.trajectory_path_publisher = self.node.create_publisher(Path, f'/{self.prefix}robotPath', qos_profile)
 
-        self.path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}OpsPath', qos_profile)
-        self.trajectory_path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}OpsTrajectoryPath', qos_profile)
+        self.path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}desiredOpsPath', qos_profile)
+        self.trajectory_path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}robotOpsPath', qos_profile)
 
-        self.ref_acc = np.zeros(11)
-        self.ref_vel = np.zeros(11)
-        self.ref_pos = np.array([3.0, 0.0, 5.0, 0,0,0, 3.1, 0.7, 0.4, 2.1, 0.0])
+        self.ref_acc = np.zeros(10)
+        self.ref_vel = np.zeros(10)
+        self.ref_pos = initial_pos
+        self.ops_pos = self.map_to_workspace(self.ref_pos)
 
-        self.ops_ref_pos = self.fk_eval(self.ref_pos.tolist()[0:10],  self.base_To)
-
-        self.node.get_logger().info(f"Initial ref ops pose={self.ops_ref_pos} ")
+        self.node.get_logger().info(f"Initial ref ops pose={self.ops_pos} ")
 
        # Initialize path poses
         self.path_poses = []
@@ -305,92 +304,83 @@ class Robot(Base):
         xq['prefix'] = self.prefix
         return xq
 
-    def to_ned_velocity(self, desired_body_vel):
+    def map_to_workspace(self, robot_configuration):
+        self.ops_pos = self.fk_eval(robot_configuration,  self.base_To).full().flatten().tolist()
+        return self.ops_pos
+    
+    def to_ned_velocity(self, body_vel):
         J_UVMS_REF = self.J_uvms(self.ref_pos[3:6])
         J_UVMS_REF_np = J_UVMS_REF.full()
-        v_ned_ref = J_UVMS_REF_np@desired_body_vel[:-1]
-        return v_ned_ref
-    
-    def integrate_vel_trajectory(self, desired_body_vel):
-        dt = self.get_state()['dt']
-        self.ned_vel = self.to_ned_velocity(desired_body_vel)
-        self.ref_pos = self.ref_intg_eval(self.ref_pos[:-1], self.ned_vel, dt).full().flatten().tolist() + [0.0]
+        velocity_ned = J_UVMS_REF_np@body_vel
+        return velocity_ned
 
+    def to_body_velocity(self, ned_vel):
+        J_UVMS_REF = self.J_uvms(self.ref_pos[3:6])
+        J_UVMS_REF_np = J_UVMS_REF.full()
+        velocity_body = np.linalg.inv(J_UVMS_REF_np)@ned_vel
+        return velocity_body
 
-    # def integrate_ops_vel_trajectory(self, desired_ops_vel):
-    #     dt = self.get_state()['dt']
-    #     self.ops_ref_pos = self.ops_ref_intg_eval(self.ops_ref_pos, desired_ops_vel, dt).full().flatten().tolist()
-        # self.node.get_logger().info(f"ops_ref_pos={self.ops_ref_pos}")
+    # def set_operation_space_goals(self, future_desired_body_vel, delay=True):
+    #     robot_configuration = self.get_state()['pose'] + self.get_state()['q']
 
-    def set_operation_space_goals(self, future_desired_body_vel, delay=True):
-        # self.integrate_ops_vel_trajectory(future_desired_body_vel)
-        robot_configuration = self.get_state()['pose'] + self.get_state()['q']
+    #     data = np.zeros((11,))
+    #     desired_generalized_vel = self.diff_iK(future_desired_body_vel,
+    #                                 robot_configuration,
+    #                                 self.uvms_ul,
+    #                                 self.uvms_ll,
+    #                                 self.k0,
+    #                                 self.base_To
+    #                                 ).full()
+    #     data[0:10] = desired_generalized_vel.flatten()
 
-        data = np.zeros((11,))
-        desired_generalized_vel = self.diff_iK(future_desired_body_vel,
-                                    robot_configuration,
-                                    self.uvms_ul,
-                                    self.uvms_ll,
-                                    self.k0,
-                                    self.base_To
-                                    ).full()
-        data[0:10] = desired_generalized_vel.flatten()
-
-
-
-        # self.node.get_logger().info(f"diff IK data={data}")
-
-        self.set_robot_goals(data, delay)
+    #     self.set_robot_goals(data, delay)
         
 
-    def set_robot_goals(self, future_desired_body_vel, delay=True):
-        self.ref_vel = future_desired_body_vel.copy()
-        self.integrate_vel_trajectory(future_desired_body_vel.copy())
-        self.ops_ref_pos = self.fk_eval(self.ref_pos[0:10],  self.base_To).full().flatten().tolist()
+    def set_robot_goals(self, desired_ned_vel, desired_ned_pos):
+        self.ned_vel = desired_ned_vel
+        self.ref_vel = self.to_body_velocity(desired_ned_vel)
+        self.ref_pos = desired_ned_pos
+        # self.ops_pos = self.map_to_workspace(self.ref_pos)
+
         # Accumulate reference trajectory
         self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
         self.trajectory_poses.append(self.ref_pos.copy())
 
-       # Accumulate ops reference trajectory
-        self.trajectory_ops_poses.append(self.ops_ref_pos.copy())
-
         self.orient_towards_velocity()
-
-        if delay:
-            t_i = 0
-        else:
-            t_i = -1
         
         self.goal = dict()
         self.goal['ref_acc'] = self.ref_acc.tolist()
-        self.goal['ref_vel'] = self.trajectory_twist[t_i]
-        self.goal['ref_pos'] = self.trajectory_poses[t_i]
+        self.goal['ref_vel'] = self.trajectory_twist[-1]
+        self.goal['ref_pos'] = self.trajectory_poses[-1]
 
     def get_robot_goals(self, ref_type):
         return self.goal.get(ref_type)
 
-    def publish_ops_reference_path(self):
-        # Publish the reference path to RViz
-        path_msg = Path()
-        path_msg.header.stamp = self.node.get_clock().now().to_msg()
-        path_msg.header.frame_id = f"{self.prefix}map"  # Set to robot map frame
+    # def publish_ops_reference_path(self):
+    #     # Publish the reference path to RViz
+    #     path_msg = Path()
+    #     path_msg.header.stamp = self.node.get_clock().now().to_msg()
+    #     path_msg.header.frame_id = f"{self.prefix}map"  # Set to robot map frame
 
-        # Create PoseStamped from ref_pos
-        pose = PoseStamped()
-        pose.header = path_msg.header
-        pose.pose.position.x = float(self.ops_ref_pos[0])
-        pose.pose.position.y = -float(self.ops_ref_pos[1])
-        pose.pose.position.z = -float(self.ops_ref_pos[2])
-        pose.pose.orientation.w = 1.0  # No rotation
+    #     # Create PoseStamped from ref_pos
+    #     pose = PoseStamped()
+    #     pose.header = path_msg.header
+    #     pose.pose.position.x = float(self.ops_pos[0])
+    #     pose.pose.position.y = float(self.ops_pos[1])
+    #     pose.pose.position.z = float(self.ops_pos[2])
+    #     pose.pose.orientation.w = 1.0  # No rotation
+    #     pose.pose.orientation.x = 0.0  # No rotation
+    #     pose.pose.orientation.y = 0.0  # No rotation
+    #     pose.pose.orientation.z = 0.0  # No rotation
+        
+    #     # Accumulate poses
+    #     self.path_ops_poses.append(pose)
+    #     path_msg.poses = self.path_ops_poses
 
-        # Accumulate poses
-        self.path_ops_poses.append(pose)
-        path_msg.poses = self.path_ops_poses
-
-        # Limit the number of poses
-        if len(self.path_ops_poses) > self.MAX_POSES:
-            self.path_ops_poses.pop(0)
-        self.path_ops_publisher.publish(path_msg)
+    #     # Limit the number of poses
+    #     if len(self.path_ops_poses) > self.MAX_POSES:
+    #         self.path_ops_poses.pop(0)
+    #     self.path_ops_publisher.publish(path_msg)
 
     def publish_reference_path(self):
         # Publish the reference path to RViz
@@ -405,6 +395,9 @@ class Robot(Base):
         pose.pose.position.y = -float(self.ref_pos[1])
         pose.pose.position.z = -float(self.ref_pos[2])
         pose.pose.orientation.w = 1.0  # No rotation
+        pose.pose.orientation.x = 0.0  # No rotation
+        pose.pose.orientation.y = 0.0  # No rotation
+        pose.pose.orientation.z = 0.0  # No rotation
 
         # Accumulate poses
         self.path_poses.append(pose)

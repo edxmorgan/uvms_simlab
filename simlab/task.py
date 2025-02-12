@@ -1,140 +1,79 @@
+# task.py
 import numpy as np
 
 class Task:
+    def __init__(self, initial_pos):
+        self.initial_pos = initial_pos
 
-    @staticmethod
-    def square_velocity_uv_ref(node, t: float,
-                            T_side: float = 10.0,
-                            speed: float = 0.1,
-                            manput: bool = False) -> np.ndarray:
+    def square_velocity_uv_ref(self, t_now, T_side=10.0, speed=0.05):
         """
-        Generate a velocity reference that traces a square in the XY-plane.
+        Produces:
+          1) A velocity vector (u, v, w, p, q, r, q1, q2, q3, q4) for a periodic square path
+             in the XY-plane,
+          2) The integrated state [x, y, z, roll, pitch, yaw, s1, s2, s3, s4] where
+             s1..s4 correspond to q1..q4 (or any other states you want to integrate).
 
-        This function returns a 6D velocity reference [u, v, w, p, q, r] 
-        in the vehicle's body frame (or inertial frame, depending on convention). 
-        The motion completes one square loop every 4*T_side seconds, 
-        moving at the given `speed`.
-
-        Args:
-            t (float): Current time in seconds.
-            T_side (float, optional): Time to traverse one side of the square [s]. 
-                                    Defaults to 10.0.
-            speed (float, optional): Linear speed along each side [m/s]. 
-                                    Defaults to 0.1.
-            manput (bool, optional): If True, returns a 10-element array 
-                                    with the last 4 elements as zeros. 
-                                    If False, returns a 6-element array.
-                                    Defaults to False.
-
-        Returns:
-            np.ndarray:
-                - shape (6,) if manput == False, i.e. [u, v, w, p, q, r]
-                - shape (10,) if manput == True, i.e. [u, v, w, p, q, r, 0, 0, 0, 0]
-
-        Example:
-            >>> # Suppose we want the velocity at time t = 15s
-            >>> v_ref = square_velocity_uv_ref(t=15.0, T_side=10.0, speed=0.1, manput=False)
-            >>> print(v_ref)
-            array([0. , 0.1, 0. , 0. , 0. , 0. ])
-            # This corresponds to movement along the y-axis on the second leg.
+        :param node: The calling ROS2 node (e.g., CoverageTask) - used to get current time.
+        :param T_side: Time (in seconds) for one side of the square.
+        :param speed: Desired linear speed along a side.
+        :return:
+            velocity: np.array of shape (10,) with 
+                      [u, v, w, p, q, r, q1, q2, q3, q4]
+            state:   np.array of shape (10,) with 
+                      [x, y, z, roll, pitch, yaw, s1, s2, s3, s4]
         """
-        # Total time for one full loop (4 sides)
-        period = 4 * T_side
+        # ------------------------------------------
+        # 2) If first time calling, init last time & state
+        #    We'll store a 10-element state: 
+        #    [x, y, z, roll, pitch, yaw, s1, s2, s3, s4]
+        # ------------------------------------------
+        if not hasattr(self, '_last_t'):
+            self._last_t = t_now
         
-        # Repeat the motion every 'period' seconds
-        t_mod = t % period
-        # node.get_logger().info(f"ref path period {t_mod}")
+        if not hasattr(self, '_state'):
+            self._state = self.initial_pos
 
-        # Determine which side (leg) of the square we are on
-        if t_mod < T_side:
-            # Leg 1: move along +x
-            u, v = speed, 0.0
-            dq0, dq1, dq2, dq3, dq4 = 0.1, -0.1, 0.1, -0.1, 0.0
-        elif t_mod < 2 * T_side:
-            # Leg 2: move along +y
-            u, v = 0.0, speed
-            dq0, dq1, dq2, dq3, dq4  = -0.1, 0.1, -0.2, 0.1, 0.0
-        elif t_mod < 3 * T_side:
-            # Leg 3: move along -x
-            u, v = -speed, 0.0
-            dq0, dq1, dq2, dq3, dq4  = 0.1, -0.1, 0.14, -0.1, 0.0
+        # ------------------------------------------
+        # 3) Calculate dt
+        # ------------------------------------------
+        dt = t_now - self._last_t
+        self._last_t = t_now
+
+        # ------------------------------------------
+        # 4) Determine which side of the square
+        # ------------------------------------------
+        cycle_time = 4.0 * T_side
+        t_mod = t_now % cycle_time
+
+        # ------------------------------------------
+        # 5) Initialize velocity vector: 
+        #    [u, v, w, p, q, r, q1, q2, q3, q4]
+        # ------------------------------------------
+        velocity = np.zeros(10, dtype=float)
+
+        # ------------------------------------------
+        # 6) Piecewise constant velocity (X, Y sides)
+        #    - Side 1: +X
+        #    - Side 2: +Y
+        #    - Side 3: -X
+        #    - Side 4: -Y
+        # ------------------------------------------
+        if 0 <= t_mod < T_side:
+            velocity[0] = speed   # u
+        elif T_side <= t_mod < 2 * T_side:
+            velocity[1] = speed   # v
+        elif 2 * T_side <= t_mod < 3 * T_side:
+            velocity[0] = -speed  # u
         else:
-            # Leg 4: move along -y
-            u, v = 0.0, -speed
-            dq0, dq1, dq2, dq3, dq4  = -0.1, 0.1, -0.1, 0.01, 0.0
+            velocity[1] = -speed  # v
+        # ------------------------------------------
+        # 7) Integrate velocity to update state
+        #    state[i] = state[i] + velocity[i]*dt
+        # ------------------------------------------
+        for i in range(10):
+            self._state[i] += velocity[i] * dt
 
-        # Zero out the other velocity components
-        w, p, q, r = 0.0, 0.0, 0.0, 0.0
-
-        # Return the desired output format
-        if manput:
-            # Return 10-element array (extra zeros at the end)
-            return np.array([u, v, w, p, q, r, dq0, dq1, dq2, dq3, dq4])
-        else:
-            # Return 6-element array
-            return np.array([u, v, w, p, q, r, 0.0, 0.0, 0.0, 0.0, 0.0])
-
-
-
-    @staticmethod
-    def square_velocity_ops_ref(node, t: float,
-                            T_side: float = 10.0,
-                            speed: float = 0.1) -> np.ndarray:
-        """
-        Generate a velocity reference that traces a square in the XY-plane.
-
-        This function returns a 6D velocity reference [u, v, w, p, q, r] 
-        in the vehicle's body frame (or inertial frame, depending on convention). 
-        The motion completes one square loop every 4*T_side seconds, 
-        moving at the given `speed`.
-
-        Args:
-            t (float): Current time in seconds.
-            T_side (float, optional): Time to traverse one side of the square [s]. 
-                                    Defaults to 10.0.
-            speed (float, optional): Linear speed along each side [m/s]. 
-                                    Defaults to 0.1.
-            manput (bool, optional): If True, returns a 10-element array 
-                                    with the last 4 elements as zeros. 
-                                    If False, returns a 6-element array.
-                                    Defaults to False.
-
-        Returns:
-            np.ndarray:
-                - shape (6,) if manput == False, i.e. [u, v, w, p, q, r]
-                - shape (10,) if manput == True, i.e. [u, v, w, p, q, r, 0, 0, 0, 0]
-
-        Example:
-            >>> # Suppose we want the velocity at time t = 15s
-            >>> v_ref = square_velocity_uv_ref(t=15.0, T_side=10.0, speed=0.1, manput=False)
-            >>> print(v_ref)
-            array([0. , 0.1, 0. , 0. , 0. , 0. ])
-            # This corresponds to movement along the y-axis on the second leg.
-        """
-        # Total time for one full loop (4 sides)
-        period = 4 * T_side
-        
-        # Repeat the motion every 'period' seconds
-        t_mod = t % period
-        # node.get_logger().info(f"ref path period {t_mod}")
-
-        # Determine which side (leg) of the square we are on
-        if t_mod < T_side:
-            # Leg 1: move along +x
-            u, v = speed, 0.0
-        elif t_mod < 2 * T_side:
-            # Leg 2: move along +y
-            u, v = 0.0, speed
-        elif t_mod < 3 * T_side:
-            # Leg 3: move along -x
-            u, v = -speed, 0.0
-        else:
-            # Leg 4: move along -y
-            u, v = 0.0, -speed
-
-        # Zero out the other velocity components
-        w, p, q, r = 0.0, 0.0, 0.0, 0.0
-
-
-        # Return 6-element array
-        return np.array([u, v, w, p, q, r])
+        # ------------------------------------------
+        # 8) Return velocity & the new integrated state
+        # ------------------------------------------
+        return velocity.flatten(), self._state.copy().flatten()

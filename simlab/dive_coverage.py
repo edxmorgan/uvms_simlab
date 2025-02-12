@@ -30,9 +30,9 @@ class CoverageTask(Node):
         self.get_logger().info(f"robot prefixes found in task node: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"robots total number of commands : {self.total_no_efforts}")
-
-        self.robots = [Robot(self, 4, prefix) for prefix in self.robots_prefix]
-
+        
+        initial_pos = np.array([0.0, 0.0, 0.0, 0,0,0, 3.1, 0.7, 0.4, 2.1])
+        self.robots_and_tasks = [(Robot(self, 4, prefix, initial_pos), Task(initial_pos)) for prefix in self.robots_prefix]
 
         qos_profile = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -53,20 +53,27 @@ class CoverageTask(Node):
         command_msg.twist.data = []
         command_msg.pose.data = []
 
-        for robot in self.robots:
+        for robot_and_task in self.robots_and_tasks:
+            robot, task = robot_and_task
             state = robot.get_state()
             if state['status']=='active':
                 sim_t = state['sim_time']
 
-                ref_body_vel = Task.square_velocity_uv_ref(self, t=sim_t, T_side=50.0, speed=0.6, manput=False).flatten() #task
-                # self.get_logger().info(f'task {ref_body_vel.shape}')
-                robot.set_robot_goals(ref_body_vel)
+                ref_ned_vel, ref_ned_pos = task.square_velocity_uv_ref(sim_t, T_side=50.0, speed=0.1) #task
+                robot.set_robot_goals(ref_ned_vel, ref_ned_pos)
                 robot.publish_reference_path()
+                # robot.publish_ops_reference_path()
+                
                 robot.publish_robot_path()
-
+                robot.get_robot_goals('ref_pos')
                 command_msg.acceleration.data.extend(robot.get_robot_goals('ref_acc'))
+                command_msg.acceleration.data.extend([0.0]) #endeffector
+
                 command_msg.twist.data.extend(robot.get_robot_goals('ref_vel'))
+                command_msg.twist.data.extend([0.0]) #endeffector
+
                 command_msg.pose.data.extend(robot.get_robot_goals('ref_pos'))
+                command_msg.pose.data.extend([0.0]) #endeffector
 
                 if len(robot.trajectory_twist) > 500:
                     robot.trajectory_twist.pop(0)
@@ -78,7 +85,8 @@ class CoverageTask(Node):
 
 
     def listener_callback(self, msg: DynamicJointState):
-        for robot in self.robots:
+        for robot_and_task in self.robots_and_tasks:
+            robot, _ = robot_and_task
             robot.update_state(msg)
 
 
