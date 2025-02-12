@@ -1,229 +1,222 @@
+#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-import pyspacemouse
 import numpy as np
-from uvms_interfaces.msg import Command
-from pynput import keyboard
 import threading
-from robot import Robot
+
+# Import ROS2 QoS settings and message type.
 from rclpy.qos import QoSProfile, QoSHistoryPolicy
+from uvms_interfaces.msg import Command
 
-class SpaceMouse(Node):
+# Import the PS4 controller library.
+from pyPS4Controller.controller import Controller
+
+# Import your robot class (make sure you have this implemented elsewhere).
+from robot import Robot
+
+
+###############################################################################
+# PS4 Controller subclass for ROS2 teleoperation.
+#
+# Mapping for ROV control:
+#   - Left analog stick (L3): surge (forward/back) and sway (left/right)
+#       (raw values normalized: (value/32767) * 20)
+#   - Right analog stick (R3): pitch and yaw (normalized to ±20)
+#   - L2 & R2 triggers: analog heave (vertical translation), normalized to ±20.
+###############################################################################
+class PS4Controller(Controller):
+    def __init__(self, ros_node, **kwargs):
+        super().__init__(**kwargs)
+        # Save a reference to the ROS node to update shared variables.
+        self.ros_node = ros_node
+
+    # --- Analog stick callbacks ---
+    # Note: The pyPS4Controller library by default does not provide a combined move 
+    # event for the analog sticks. If your version does support on_L3_move and on_R3_move,
+    # these callbacks will be used. Otherwise, you may need to override the directional events 
+    # (on_L3_left, on_L3_right, etc.) and combine the axis data yourself.
+    
+    def on_L3_move(self, x, y):
+        # Normalize raw x and y (expected range ±32767) to ±20.
+        scaled_x = 20 * (x / 32767.0)
+        scaled_y = 20 * (y / 32767.0)
+        with self.ros_node.controller_lock:
+            # For the ROV, we map: x -> sway and y -> surge.
+            self.ros_node.rov_x = scaled_x
+            self.ros_node.rov_y = scaled_y
+        self.ros_node.get_logger().info(
+            f"L3 move: scaled x = {scaled_x:.2f}, scaled y = {scaled_y:.2f}"
+        )
+
+    def on_R3_move(self, x, y):
+        # Normalize raw x and y to ±20.
+        scaled_yaw = 20 * (x / 32767.0)
+        scaled_pitch = 20 * (y / 32767.0)
+        with self.ros_node.controller_lock:
+            # For the ROV, we map: x -> yaw and y -> pitch.
+            self.ros_node.rov_yaw = scaled_yaw
+            self.ros_node.rov_pitch = scaled_pitch
+        self.ros_node.get_logger().info(
+            f"R3 move: scaled yaw = {scaled_yaw:.2f}, scaled pitch = {scaled_pitch:.2f}"
+        )
+
+    # --- Trigger callbacks for heave ---
+    def on_R2_press(self, value):
+        # For R2, we assume the raw value is in [0, 32767] (downward heave).
+        scaled_value = 20 * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_z = -scaled_value
+        self.ros_node.get_logger().info(f"R2 pressed: Heave (down) = {-scaled_value:.2f}")
+
+    def on_R2_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_z = 0.0
+        self.ros_node.get_logger().info("R2 released: Heave = 0")
+
+    def on_L2_press(self, value):
+        # For L2, we assume the raw value is in [0, 32767] (upward heave).
+        scaled_value = 20 * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_z = scaled_value
+        self.ros_node.get_logger().info(f"L2 pressed: Heave (up) = {scaled_value:.2f}")
+
+    def on_L2_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_z = 0.0
+        self.ros_node.get_logger().info("L2 released: Heave = 0")
+
+
+###############################################################################
+# ROS2 Node that uses the PS4 controller for ROV teleoperation.
+#
+# The ROV command is built as follows:
+#   - ROV Command (6 elements): [surge, sway, heave, roll, pitch, yaw]
+#       surge  = - (left stick vertical)   (inverted so that pushing forward is positive)
+#       sway   = left stick horizontal
+#       heave  = analog value from triggers
+#       roll   = 0.0 (unused)
+#       pitch  = right stick vertical
+#       yaw    = right stick horizontal
+#
+#   - Manipulator Command (5 elements): all zeros.
+#
+# Total command for each robot is 11 elements.
+###############################################################################
+class PS4TeleopNode(Node):
     def __init__(self):
-        super().__init__('space_mouse_node',
-                          automatically_declare_parameters_from_overrides=True)
+        super().__init__('ps4_teleop_node',
+                         automatically_declare_parameters_from_overrides=True)
 
-        # Get parameter values
+        # Retrieve parameters (e.g. number of robots, efforts, and robot prefixes).
         self.no_robot = self.get_parameter('no_robot').value
         self.no_efforts = self.get_parameter('no_efforts').value
         self.robots_prefix = self.get_parameter('robots_prefix').value
-        
-        self.get_logger().info(f"robot prefixes found in task node: {self.robots_prefix}")
-        self.total_no_efforts = self.no_robot * self.no_efforts
-        self.get_logger().info(f"robots total number of commands : {self.total_no_efforts}")
 
-        initial_pos = np.array([0.0, 0.0, 0.0, 0,0,0, 3.1, 0.7, 0.4, 2.1])
+        self.get_logger().info(f"Robot prefixes found: {self.robots_prefix}")
+        self.total_no_efforts = self.no_robot * self.no_efforts
+        self.get_logger().info(f"Total number of commands: {self.total_no_efforts}")
+
+        # Initialize robots (make sure your Robot class is defined properly).
+        initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
         self.robots = [Robot(self, 4, prefix, initial_pos) for prefix in self.robots_prefix]
 
-
-        qos_profile = QoSProfile(
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=10
-        )
-
+        # Setup a publisher with a QoS profile.
+        qos_profile = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10)
         self.publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', qos_profile)
+
+        # Create a timer callback to publish commands at 1000 Hz.
         frequency = 1000  # Hz
         self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
 
-        # Initialize keyboard-controlled variables
-        self.kb_lock = threading.Lock()
-        self.kb_x = 0.0    # Forward/Backward
-        self.kb_y = 0.0    # Left/Right
-        self.kb_z = 0.0    # Down
-        self.kb_roll = 0.0
-        self.kb_pitch = 0.0
-        self.kb_yaw = 0.0
+        # Shared variables updated by the PS4 controller callbacks.
+        self.controller_lock = threading.Lock()
+        self.rov_x = 0.0      # Left stick horizontal (sway)
+        self.rov_y = 0.0      # Left stick vertical (surge)
+        self.rov_z = 0.0      # Heave from triggers
+        self.rov_roll = 0.0   # Unused
+        self.rov_pitch = 0.0  # Right stick vertical (pitch)
+        self.rov_yaw = 0.0    # Right stick horizontal (yaw)
 
-        # Start keyboard listener in a separate thread
-        self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
-        self.listener.start()
+        # Instantiate the PS4 controller.
+        # If you are not receiving analog stick events, try adjusting the event_format.
+        self.ps4_controller = PS4Controller(
+            ros_node=self,
+            interface="/dev/input/js0",
+            connecting_using_ds4drv=False,
+            event_format="3Bh2b"  # Try "LhBB" if you experience mapping issues.
+        )
+        # Enable debug mode to print raw event data.
+        self.ps4_controller.debug = True
 
-        self.get_logger().info("SpaceMouse node has been initialized with keyboard control.")
+        # Start the PS4 controller listener in a separate (daemon) thread.
+        self.controller_thread = threading.Thread(target=self.ps4_controller.listen, daemon=True)
+        self.controller_thread.start()
 
-    def on_press(self, key):
-        with self.kb_lock:
-            try:
-                if key == keyboard.Key.up:
-                    self.kb_x = 10     # Forward
-                    self.get_logger().debug("Up Arrow Pressed: Forward")
-                elif key == keyboard.Key.down:
-                    self.kb_x = -10   # Backward
-                    self.get_logger().debug("Down Arrow Pressed: Backward")
-                elif key == keyboard.Key.left:
-                    self.kb_y = -10   # Left
-                    self.get_logger().debug("Left Arrow Pressed: Left")
-                elif key == keyboard.Key.right:
-                    self.kb_y = 10   # Right
-                    self.get_logger().debug("Right Arrow Pressed: Right")
-                elif key == keyboard.Key.space:
-                    self.kb_z = 20     # Down
-                    self.get_logger().debug("Spacebar Pressed: Down")
-                # Rotational Controls: W, S, A, D, Q, E
-                elif hasattr(key, 'char') and key.char is not None:
-                    char = key.char.lower()
-                    if char == 'w':
-                        self.kb_pitch = -6  # Pitch Up
-                        self.get_logger().debug("Key 'W' Pressed: Pitch Up")
-                    elif char == 's':
-                        self.kb_pitch = 6  # Pitch Down
-                        self.get_logger().debug("Key 'S' Pressed: Pitch Down")
-                    elif char == 'd':
-                        self.kb_roll = 6  # Roll Left
-                        self.get_logger().debug("Key 'D' Pressed: Roll Left")
-                    elif char == 'a':
-                        self.kb_roll = -6  # Roll Right
-                        self.get_logger().debug("Key 'A' Pressed: Roll Right")
-                    elif char == 'q':
-                        self.kb_yaw = -6  # Yaw Left
-                        self.get_logger().debug("Key 'Q' Pressed: Yaw Left")
-                    elif char == 'e':
-                        self.kb_yaw = 6  # Yaw Right
-                        self.get_logger().debug("Key 'E' Pressed: Yaw Right")
-            except AttributeError:
-                # Handle special keys if necessary
-                pass
-
-    def on_release(self, key):
-        with self.kb_lock:
-            if key == keyboard.Key.up or key == keyboard.Key.down:
-                self.kb_x = 0.0
-                self.get_logger().debug(f"{key} Released: Stop Forward/Backward")
-            elif key == keyboard.Key.left or key == keyboard.Key.right:
-                self.kb_y = 0.0
-                self.get_logger().debug(f"{key} Released: Stop Left/Right")
-            elif key == keyboard.Key.space:
-                self.kb_z = 0.0
-                self.get_logger().debug("Spacebar Released: Stop Down")
-            # Rotational Controls Release: W, S, A, D, Q, E
-            elif hasattr(key, 'char') and key.char is not None:
-                char = key.char.lower()
-                if char in ['w', 's']:
-                    self.kb_pitch = 0.0
-                    self.get_logger().debug(f"Key '{char.upper()}' Released: Stop Pitch")
-                elif char in ['a', 'd']:
-                    self.kb_roll = 0.0
-                    self.get_logger().debug(f"Key '{char.upper()}' Released: Stop Roll")
-                elif char in ['q', 'e']:
-                    self.kb_yaw = 0.0
-                    self.get_logger().debug(f"Key '{char.upper()}' Released: Stop Yaw")
-            # Ignore other keys
+        self.get_logger().info("PS4 Teleop node initialized for ROV control with normalized scaling.")
 
     def timer_callback(self):
-        # Create and publish the command message
+        # Create a new command message.
         command_msg = Command()
-        state = pyspacemouse.read()
         command_msg.command_type = "force"
 
-        # Process SpaceMouse input
-        real_data = [0.0] * 5
+        # Safely acquire the latest controller values.
+        with self.controller_lock:
+            left_x = self.rov_x
+            left_y = self.rov_y
+            heave = self.rov_z
+            pitch = self.rov_pitch
+            yaw = self.rov_yaw
 
-        if state.buttons == [1, 0]:  # Open --> right button
-            real_data[4] = -2
-        elif state.buttons == [0, 1]:  # Close --> right button
-            real_data[4] = 2
+        # Map joystick values to ROV command.
+        surge = -left_y   # Invert so that pushing forward is positive.
+        sway = left_x
+        roll = 0.0
 
-        if state.yaw > 0.0:
-            real_data[3] = 0.35*state.yaw
-        elif state.yaw < -0.5:
-            real_data[3] = 0.6*state.yaw
+        rov_command = [surge, sway, heave, roll, pitch, yaw]
+        manipulator_command = [0.0] * 5  # Manipulator command (unused).
 
-        if abs(state.y) > 0.5:
-            real_data[2] = 0.65*-np.sign(state.y)
-
-        if abs(state.z) > 0.5:
-            real_data[1] = -np.sign(state.z)
-
-        if abs(state.x) > 0.5:
-            real_data[0] = 2.0*-np.sign(state.x)
-
-        # if state.yaw > 0.0:
-        #     real_data[3] = 5*state.yaw
-        # elif state.yaw < -0.5:
-        #     real_data[3] = 5*state.yaw
-
-        # if abs(state.y) > 0.5:
-        #     real_data[2] = 5*-np.sign(state.y)
-
-        # if abs(state.z) > 0.5:
-        #     real_data[1] = -5*np.sign(state.z)
-
-        # if abs(state.x) > 0.5:
-        #     real_data[0] = 5*-np.sign(state.x)
-
-        # Acquire keyboard-controlled variables
-        with self.kb_lock:
-            kb_x = self.kb_x
-            kb_y = self.kb_y
-            kb_z = self.kb_z
-            kb_roll = self.kb_roll
-            kb_pitch = self.kb_pitch
-            kb_yaw = self.kb_yaw
-
-        # Initialize data list
+        # Build the full command list for all robots.
         data = []
+        for robot in self.robots:
+            robot.publish_robot_path()  # Assumes each Robot instance handles its own publishing.
+            data.extend(rov_command + manipulator_command)
 
-        # Apply the same commands to all robots
-        for robot_index, robot in enumerate(self.robots):
-            robot.publish_robot_path()
-            # Add keyboard-controlled x, y, z, roll, pitch, yaw
-            data.extend([kb_x, kb_y, kb_z, kb_roll, kb_pitch, kb_yaw])  # 6 elements
-
-            # Add real_data for manipulator joints (assuming real_data is applicable per robot)
-            data.extend(real_data)  # 5 elements
-
-        # Calculate remaining efforts if any
+        # Adjust the data length if needed.
         current_length = len(data)
         if current_length < self.total_no_efforts:
-            other_data = [0.0] * (self.total_no_efforts - current_length)
-            data.extend(other_data)
+            data.extend([0.0] * (self.total_no_efforts - current_length))
         elif current_length > self.total_no_efforts:
             self.get_logger().warning(
                 f"Data length ({current_length}) exceeds total_no_efforts ({self.total_no_efforts}). Truncating data."
             )
             data = data[:self.total_no_efforts]
 
-        # Ensure the data length matches
+        # Ensure that the command has the expected number of elements.
         assert len(data) == self.total_no_efforts, (
             f"Data length mismatch. Expected {self.total_no_efforts}, got {len(data)}"
         )
+        command_msg.force.data = [float(value) for value in data]
 
-        # Convert all data to float
-        dataF = [float(value) for value in data]
-        command_msg.force.data = dataF
-
-        # Publish the command
+        # Publish the command.
         self.publisher_.publish(command_msg)
 
     def destroy_node(self):
-        self.listener.stop()
+        # Optionally, stop the PS4 controller listener here if needed.
         super().destroy_node()
 
 
+###############################################################################
+# Main entry point.
+###############################################################################
 def main(args=None):
     rclpy.init(args=args)
-    space_mouse = SpaceMouse()
-
-    if pyspacemouse.open():
-        try:
-            rclpy.spin(space_mouse)
-        except KeyboardInterrupt:
-            space_mouse.get_logger().info('SpaceMouse node stopped by KeyboardInterrupt.')
-        finally:
-            space_mouse.destroy_node()
-            rclpy.shutdown()
-    else:
-        space_mouse.get_logger().error("Failed to open SpaceMouse.")
-        space_mouse.destroy_node()
+    teleop_node = PS4TeleopNode()
+    try:
+        rclpy.spin(teleop_node)
+    except KeyboardInterrupt:
+        teleop_node.get_logger().info('PS4 Teleop node stopped by KeyboardInterrupt.')
+    finally:
+        teleop_node.destroy_node()
         rclpy.shutdown()
 
 
