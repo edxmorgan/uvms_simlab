@@ -32,10 +32,9 @@ class Base:
         ]
 
 class Axis_Interface_names:
-    position = 'position'
-    velocity = 'velocity'
-    sim_time = 'sim_time'
-    effort = 'effort'
+    manipulator_position = 'position'
+    manipulator_velocity = 'velocity'
+    manipulator_effort = 'effort'
     
     floating_base_x = 'position.x'
     floating_base_y = 'position.y'
@@ -53,6 +52,14 @@ class Axis_Interface_names:
     floating_pitch_vel = 'angular_velocity.y'
     floating_yaw_vel = 'angular_velocity.z'
 
+    floating_force_x = 'force.x'
+    floating_force_y = 'force.y'
+    floating_force_z = 'force.z'
+    floating_torque_x = 'torque.x'
+    floating_torque_y = 'torque.y'
+    floating_torque_z = 'torque.z'
+
+    sim_time = 'sim_time'
     sim_period = 'sim_period'
 
 class Manipulator(Base):
@@ -103,7 +110,7 @@ class Manipulator(Base):
              self.alpha_axis_d,
              self.alpha_axis_c,
              self.alpha_axis_b],
-            [Axis_Interface_names.position] * 4
+            [Axis_Interface_names.manipulator_position] * 4
         )
 
         self.dq = self.get_interface_value(
@@ -112,7 +119,7 @@ class Manipulator(Base):
              self.alpha_axis_d,
              self.alpha_axis_c,
              self.alpha_axis_b],
-            [Axis_Interface_names.velocity] * 4
+            [Axis_Interface_names.manipulator_velocity] * 4
         )
 
         self.effort = self.get_interface_value(
@@ -121,7 +128,7 @@ class Manipulator(Base):
              self.alpha_axis_d,
              self.alpha_axis_c,
              self.alpha_axis_b],
-            [Axis_Interface_names.effort] * 4
+            [Axis_Interface_names.manipulator_effort] * 4
         )
 
 
@@ -212,6 +219,7 @@ class Robot(Base):
         self.arm = Manipulator(node, n_joint, prefix)
         self.ned_pose = [0] * 6
         self.body_vel = [0] * 6
+        self.body_forces = [0] * 6
         self.prefix = prefix
         self.status = 'inactive'
         self.sim_time = 0.0
@@ -288,6 +296,19 @@ class Robot(Base):
                 Axis_Interface_names.floating_yaw_vel
             ]
         )
+
+        self.body_forces = self.get_interface_value(
+            msg,
+            [self.floating_base] * 6,
+            [
+            Axis_Interface_names.floating_force_x,
+            Axis_Interface_names.floating_force_y, 
+            Axis_Interface_names.floating_force_z,
+            Axis_Interface_names.floating_torque_x,
+            Axis_Interface_names.floating_torque_y,
+            Axis_Interface_names.floating_torque_z
+            ]
+        )
         if self.status == 'inactive':
             self.start_time = self.get_sim_sec(msg)
             self.status = 'active'
@@ -299,9 +320,12 @@ class Robot(Base):
         xq['name'] = self.prefix
         xq['pose'] = self.ned_pose
         xq['body_vel'] =self.body_vel
+        xq['body_forces'] = self.body_forces
         xq['status'] = self.status
         xq['sim_time'] = self.sim_time
         xq['prefix'] = self.prefix
+        # self.node.get_logger().info(f"body forces {xq['body_forces']}")
+
         return xq
 
     def map_to_workspace(self, robot_configuration):
@@ -491,27 +515,30 @@ class Robot(Base):
                 # Write a header row for clarity
                 columns = [
                     'timestamp',
-                    # 'base_x_force', 'base_y_force', 'base_z_force', 'base_x_torque', 'base_y_torque', 'base_z_torque',
-                    # 'base_x', 'base_y', 'base_z', 'base_roll', 'base_pitch', 'base_yaw',
-                    # 'base_dx', 'base_dy', 'base_dz', 'base_vel_roll', 'base_vel_pitch', 'base_vel_yaw',
-
+                    'base_x_force', 'base_y_force', 'base_z_force', 'base_x_torque', 'base_y_torque', 'base_z_torque',
+                    'base_x', 'base_y', 'base_z', 'base_roll', 'base_pitch', 'base_yaw',
+                    'base_dx', 'base_dy', 'base_dz', 'base_vel_roll', 'base_vel_pitch', 'base_vel_yaw',
+                    
                     'effort_alpha_axis_e', 'effort_alpha_axis_d', 'effort_alpha_axis_c', 'effort_alpha_axis_b',
                     'q_alpha_axis_e', 'q_alpha_axis_d', 'q_alpha_axis_c', 'q_alpha_axis_b',
                     'dq_alpha_axis_e', 'dq_alpha_axis_d', 'dq_alpha_axis_c', 'dq_alpha_axis_b',
-                    'q_alpha_axis_e_ref', 'q_alpha_axis_d_ref', 'q_alpha_axis_c_ref', 'q_alpha_axis_b_ref',
                 ]
                 self.csv_writer.writerow(columns)
 
-    def write_data_to_file(self, ref):
+    def write_data_to_file(self):
         if self.record:
             row_data = []
             info = self.get_state()
         
             row_data.extend([info['sim_time']])
+            
+            row_data.extend(info['body_forces'])
+            row_data.extend(info['pose'])
+            row_data.extend(info['body_vel'])
+
             row_data.extend(info['arm_effort'])
             row_data.extend(info['q'])
             row_data.extend(info['dq'])
-            row_data.extend(ref)
 
             """Write a single row of data to the CSV file."""
             self.csv_writer.writerow(row_data)

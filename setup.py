@@ -29,7 +29,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'mouse_node_effort = simlab.mouse_node_effort:main',
+            'joystick_controller = simlab.joystick_control:main',
             'sensor_py_node = simlab.sensor:main',
             'excite_py_node = simlab.excite_effort:main',
             'coverage_node = simlab.dive_coverage:main',
