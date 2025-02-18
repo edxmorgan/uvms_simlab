@@ -30,12 +30,12 @@ class PS4Controller(Controller):
         # Save a reference to the ROS node to update shared variables.
         self.ros_node = ros_node
 
-        gain = 5
+        gain = 0.5#5
 
         # Gains for different DOFs
         self.max_torque = gain*1.0             # for surge/sway
         self.heave_max_torque = gain*3.0      # for R2 "down" heave
-        self.orient_max_torque = gain*0.4        # fOR ROLL, PITCH, YAW
+        self.orient_max_torque = gain*0.2        # fOR ROLL, PITCH, YAW
     # --- Analog stick callbacks ---
     # Note: The pyPS4Controller library by default does not provide a combined move 
     # event for the analog sticks. If your version does support on_L3_move and on_R3_move,
@@ -264,6 +264,7 @@ class PS4TeleopNode(Node):
         self.no_robot = self.get_parameter('no_robot').value
         self.no_efforts = self.get_parameter('no_efforts').value
         self.robots_prefix = self.get_parameter('robots_prefix').value
+        self.record = self.get_parameter('record_data').value
 
         self.get_logger().info(f"Robot prefixes found: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
@@ -271,7 +272,7 @@ class PS4TeleopNode(Node):
 
         # Initialize robots (make sure your Robot class is defined properly).
         initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
-        self.robots = [Robot(self, 4, prefix, initial_pos, True) for prefix in self.robots_prefix]
+        self.robots = [Robot(self, 4, prefix, initial_pos, self.record) for prefix in self.robots_prefix]
 
         # Setup a publisher with a QoS profile.
         qos_profile = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10)

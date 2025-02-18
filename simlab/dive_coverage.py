@@ -26,13 +26,14 @@ class CoverageTask(Node):
         self.no_robot = self.get_parameter('no_robot').value
         self.no_efforts = self.get_parameter('no_efforts').value
         self.robots_prefix = self.get_parameter('robots_prefix').value
-        
+        self.record = self.get_parameter('record_data').value
+
         self.get_logger().info(f"robot prefixes found in task node: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"robots total number of commands : {self.total_no_efforts}")
         
-        initial_pos = np.array([0.0, 0.0, 0.0, 0,0,0, 3.1, 0.7, 0.4, 2.1])
-        self.robots_and_tasks = [(Robot(self, 4, prefix, initial_pos), Task(initial_pos)) for prefix in self.robots_prefix]
+        initial_pos = np.array([0.0, 0.0, 8.0, 0,0,0, 3.1, 0.7, 0.4, 2.1])
+        self.robots_and_tasks = [(Robot(self, 4, prefix, initial_pos, self.record), Task(initial_pos)) for prefix in self.robots_prefix]
 
         qos_profile = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
