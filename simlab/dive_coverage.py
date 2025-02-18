@@ -49,7 +49,7 @@ class CoverageTask(Node):
 
     def timer_callback(self):
         command_msg = Command()
-        command_msg.command_type = "pid"
+        command_msg.command_type = "optimal"
         command_msg.acceleration.data = []
         command_msg.twist.data = []
         command_msg.pose.data = []

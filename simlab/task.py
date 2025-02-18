@@ -80,6 +80,10 @@ class Task:
         for i in range(10):
             self._state[i] += velocity[i] * dt
 
+        # Ensure z (state[2]) does not drop below zero.
+        if self._state[2] < 0:
+            self._state[2] = 0
+
         # ------------------------------------------
         # 8) Return velocity & the new integrated state.
         # ------------------------------------------
