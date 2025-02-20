@@ -62,6 +62,34 @@ class Axis_Interface_names:
     sim_time = 'sim_time'
     sim_period = 'sim_period'
 
+    imu_roll = "imu_roll"
+    imu_pitch = "imu_pitch"
+    imu_yaw = "imu_yaw"
+
+    imu_q_w = "imu_orientation_w"
+    imu_q_x = "imu_orientation_x"
+    imu_q_y = "imu_orientation_y"
+    imu_q_z = "imu_orientation_z"
+
+    imu_wx = "imu_angular_vel_x"
+    imu_wy = "imu_angular_vel_y"
+    imu_wz = "imu_angular_vel_z"
+
+    imu_ax = "imu_linear_acceleration_x"
+    imu_ay = "imu_linear_acceleration_y"
+    imu_az = "imu_linear_acceleration_z"
+
+    depth_pressure2 = "depth_from_pressure2"
+
+    dvl_roll = "dvl_gyro_roll"
+    dvl_pitch = "dvl_gyro_pitch"
+    dvl_yaw = "dvl_gyro_yaw"
+
+    dvl_speed_x = "dvl_speed_x"
+    dvl_speed_y = "dvl_speed_y"
+    dvl_speed_z = "dvl_speed_z"
+
+    
 class Manipulator(Base):
     def __init__(self, node: Node, n_joint, prefix):
         self.node = node
@@ -198,7 +226,14 @@ class Manipulator(Base):
 
 class Robot(Base):
     def __init__(self, node: Node, n_joint, prefix, initial_pos, record=False):
-
+        self.subscription = node.create_subscription(
+                DynamicJointState,
+                'dynamic_joint_states',
+                self.listener_callback,
+                10
+            )
+        self.subscription  # prevent unused variable warning
+    
         package_share_directory = ament_index_python.get_package_share_directory(
                 'simlab')
         ref_intg_path = os.path.join(package_share_directory, 'ref_intg.casadi')
@@ -214,11 +249,33 @@ class Robot(Base):
         self.fk_eval = ca.Function.load(fk_path) # differential inverse kinematics
         self.node = node
 
+        self.sensors = [Axis_Interface_names.imu_roll,
+                    Axis_Interface_names.imu_pitch,
+                    Axis_Interface_names.imu_yaw,
+                    Axis_Interface_names.imu_q_w,
+                    Axis_Interface_names.imu_q_x,
+                    Axis_Interface_names.imu_q_y,
+                    Axis_Interface_names.imu_q_z,
+                    Axis_Interface_names.imu_wx,
+                    Axis_Interface_names.imu_wy,
+                    Axis_Interface_names.imu_wz,
+                    Axis_Interface_names.imu_ax,
+                    Axis_Interface_names.imu_ay,
+                    Axis_Interface_names.imu_az,
+                    Axis_Interface_names.depth_pressure2,
+                    Axis_Interface_names.dvl_roll,
+                    Axis_Interface_names.dvl_pitch,
+                    Axis_Interface_names.dvl_yaw,
+                    Axis_Interface_names.dvl_speed_x,
+                    Axis_Interface_names.dvl_speed_y,
+                    Axis_Interface_names.dvl_speed_z]
+
         self.n_joint = n_joint
         self.floating_base = f'{prefix}IOs'
         self.arm = Manipulator(node, n_joint, prefix)
         self.ned_pose = [0] * 6
         self.body_vel = [0] * 6
+        self.sensor_reading = [0] * len(self.sensors)
         self.body_forces = [0] * 6
         self.prefix = prefix
         self.status = 'inactive'
@@ -284,6 +341,7 @@ class Robot(Base):
             ]
         )
 
+
         self.body_vel = self.get_interface_value(
             msg,
             [self.floating_base] * 6,
@@ -295,6 +353,12 @@ class Robot(Base):
                 Axis_Interface_names.floating_pitch_vel,
                 Axis_Interface_names.floating_yaw_vel
             ]
+        )
+        
+        self.sensor_reading = self.get_interface_value(
+            msg,
+            [self.floating_base] * len(self.sensors),
+            self.sensors
         )
 
         self.body_forces = self.get_interface_value(
@@ -324,7 +388,8 @@ class Robot(Base):
         xq['status'] = self.status
         xq['sim_time'] = self.sim_time
         xq['prefix'] = self.prefix
-        # self.node.get_logger().info(f"body forces {xq['body_forces']}")
+        xq['raw_sensor_readings'] = self.sensor_reading
+        # self.node.get_logger().info(f"body forces {xq['raw_sensor_readings']}")
 
         return xq
 
@@ -522,6 +587,13 @@ class Robot(Base):
                     'effort_alpha_axis_e', 'effort_alpha_axis_d', 'effort_alpha_axis_c', 'effort_alpha_axis_b',
                     'q_alpha_axis_e', 'q_alpha_axis_d', 'q_alpha_axis_c', 'q_alpha_axis_b',
                     'dq_alpha_axis_e', 'dq_alpha_axis_d', 'dq_alpha_axis_c', 'dq_alpha_axis_b',
+
+                    'imu_roll', 'imu_pitch', 'imu_yaw', 'imu_q_w', 'imu_q_x', 'imu_q_y', 'imu_q_z',
+                    'imu_ang_vel_x', 'imu_ang_vel_y','imu_ang_vel_z',
+                    'imu_linear_acc_x', 'imu_linear_acc_y','imu_linear_acc_z',
+                    'depth_from_pressure2',
+                    'dvl_roll', 'dvl_pitch', 'dvl_yaw',
+                    'dvl_speed_x', 'dvl_speed_y', 'dvl_speed_z'
                 ]
                 self.csv_writer.writerow(columns)
 
@@ -539,6 +611,8 @@ class Robot(Base):
             row_data.extend(info['arm_effort'])
             row_data.extend(info['q'])
             row_data.extend(info['dq'])
+            
+            row_data.extend(info['raw_sensor_readings'])
 
             """Write a single row of data to the CSV file."""
             self.csv_writer.writerow(row_data)
@@ -547,3 +621,6 @@ class Robot(Base):
     def close_csv(self):
         # Close the CSV file when the node is destroyed
         self.csv_file.close()
+
+    def listener_callback(self, msg: DynamicJointState):
+        self.update_state(msg)

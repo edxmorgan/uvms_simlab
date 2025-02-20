@@ -30,7 +30,10 @@ class PS4Controller(Controller):
         # Save a reference to the ROS node to update shared variables.
         self.ros_node = ros_node
 
-        gain = 0.5#5
+        sim_gain = 0.5
+        real_gain = 5
+
+        gain = real_gain
 
         # Gains for different DOFs
         self.max_torque = gain*1.0             # for surge/sway

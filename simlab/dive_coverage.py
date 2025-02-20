@@ -13,15 +13,6 @@ class CoverageTask(Node):
         super().__init__('coverage_task',
                           automatically_declare_parameters_from_overrides=True)
 
-
-        self.subscription = self.create_subscription(
-            DynamicJointState,
-            'dynamic_joint_states',
-            self.listener_callback,
-            10
-        )
-        self.subscription  # prevent unused variable warning
-
         # Get parameter values
         self.no_robot = self.get_parameter('no_robot').value
         self.no_efforts = self.get_parameter('no_efforts').value
@@ -82,14 +73,6 @@ class CoverageTask(Node):
                 
         # Publish the command
         self.uvms_publisher_.publish(command_msg)
-
-
-
-    def listener_callback(self, msg: DynamicJointState):
-        for robot_and_task in self.robots_and_tasks:
-            robot, _ = robot_and_task
-            robot.update_state(msg)
-
 
     def destroy_node(self):
         super().destroy_node()
