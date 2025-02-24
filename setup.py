@@ -1,5 +1,5 @@
 from setuptools import find_packages, setup
-
+from glob import glob
 package_name = 'simlab'
 
 setup(
@@ -10,12 +10,19 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name, ['resource/ref_intg.casadi']),
-        ('share/' + package_name, ['resource/J_uvms.casadi']),
         ('share/' + package_name, ['resource/diff_iK.casadi']),
-        ('share/' + package_name, ['resource/ops_twist_integrator.casadi']),
         ('share/' + package_name, ['resource/fk_eval.casadi']),
+        (
+            'share/' + package_name + '/manipulator',
+            glob('resource/manipulator/*')
+        ),
+        (
+            'share/' + package_name + '/vehicle',
+            glob('resource/vehicle/*')
+        ),
         ('lib/' + package_name, [package_name+'/robot.py']),
+        ('lib/' + package_name, [package_name+'/blue_rov.py']),
+        ('lib/' + package_name, [package_name+'/alpha_reach.py']),
         ('lib/' + package_name, [package_name+'/task.py']),
         ('lib/' + package_name, [package_name+'/shape_task.py']),
     ],

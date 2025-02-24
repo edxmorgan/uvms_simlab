@@ -12,15 +12,17 @@ from rclpy.qos import QoSProfile, QoSHistoryPolicy
 import csv
 from datetime import datetime
 import random
-
+import copy
+from blue_rov import Params as blue
+from alpha_reach import Params as alpha
 class Base:
     def nano_and_sec_to_sec(self, nanoseconds, seconds):
         """Converts nanoseconds and seconds to total seconds."""
         return seconds + (nanoseconds / 1e9)
         
-    def get_sim_sec(self,  msg: DynamicJointState):
-        total_sec = self.nano_and_sec_to_sec(msg.header.stamp.nanosec, msg.header.stamp.sec)
-        return total_sec
+    # def get_sim_sec(self,  msg: DynamicJointState):
+    #     total_sec = self.nano_and_sec_to_sec(msg.header.stamp.nanosec, msg.header.stamp.sec)
+    #     return total_sec
     
     def get_interface_value(self, msg: DynamicJointState, dof_names: list, interface_names: list):
         names = msg.joint_names
@@ -236,17 +238,26 @@ class Robot(Base):
     
         package_share_directory = ament_index_python.get_package_share_directory(
                 'simlab')
-        ref_intg_path = os.path.join(package_share_directory, 'ref_intg.casadi')
-        ops_ref_intg_path = os.path.join(package_share_directory, 'ops_twist_integrator.casadi')
-        j_uvms_path = os.path.join(package_share_directory, 'J_uvms.casadi')
         diff_iK_path = os.path.join(package_share_directory, 'diff_iK.casadi')
         fk_path = os.path.join(package_share_directory, 'fk_eval.casadi')
 
-        self.ref_intg_eval = ca.Function.load(ref_intg_path)
-        self.ops_ref_intg_eval = ca.Function.load(ops_ref_intg_path)
-        self.J_uvms = ca.Function.load(j_uvms_path) # body to ned tf
+        vehicle_C_path = os.path.join(package_share_directory, 'vehicle/C.casadi')
+        vehicle_M_path = os.path.join(package_share_directory, 'vehicle/M.casadi')
+        vehicle_J_path = os.path.join(package_share_directory, 'vehicle/J_uv.casadi')
+
+        manipulator_C_path = os.path.join(package_share_directory, 'manipulator/C.casadi')
+        manipulator_M_path = os.path.join(package_share_directory, 'manipulator/M.casadi')
+
         self.diff_iK = ca.Function.load(diff_iK_path) # differential inverse kinematics
         self.fk_eval = ca.Function.load(fk_path) # differential inverse kinematics
+
+        self.vehicle_C = ca.Function.load(vehicle_C_path)
+        self.vehicle_M = ca.Function.load(vehicle_M_path)
+        self.vehicle_J = ca.Function.load(vehicle_J_path)
+
+        self.manipulator_C = ca.Function.load(manipulator_C_path)
+        self.manipulator_M = ca.Function.load(manipulator_M_path)
+
         self.node = node
 
         self.sensors = [Axis_Interface_names.imu_roll,
@@ -325,7 +336,7 @@ class Robot(Base):
         self.record = record
 
         self.initiaize_data_writer()
-
+    
     def update_state(self, msg: DynamicJointState):
         self.arm.update_state(msg)
         self.ned_pose = self.get_interface_value(
@@ -373,11 +384,12 @@ class Robot(Base):
             Axis_Interface_names.floating_torque_z
             ]
         )
+        dynamics_sim_time = self.get_interface_value(msg,[self.floating_base],[Axis_Interface_names.sim_time])[0]
         if self.status == 'inactive':
-            self.start_time = self.get_sim_sec(msg)
+            self.start_time = copy.copy(dynamics_sim_time)
             self.status = 'active'
         elif self.status == 'active':
-            self.sim_time = self.get_sim_sec(msg) - self.start_time
+            self.sim_time = dynamics_sim_time - self.start_time
 
     def get_state(self) -> Dict:
         xq = self.arm.get_state()
@@ -396,17 +408,11 @@ class Robot(Base):
     def map_to_workspace(self, robot_configuration):
         self.ops_pos = self.fk_eval(robot_configuration,  self.base_To).full().flatten().tolist()
         return self.ops_pos
-    
-    def to_ned_velocity(self, body_vel):
-        J_UVMS_REF = self.J_uvms(self.ref_pos[3:6])
-        J_UVMS_REF_np = J_UVMS_REF.full()
-        velocity_ned = J_UVMS_REF_np@body_vel
-        return velocity_ned
 
     def to_body_velocity(self, ned_vel):
-        J_UVMS_REF = self.J_uvms(self.ref_pos[3:6])
-        J_UVMS_REF_np = J_UVMS_REF.full()
-        velocity_body = np.linalg.inv(J_UVMS_REF_np)@ned_vel
+        velocity_body = copy.copy(ned_vel)
+        J_UV_REF = self.vehicle_J(self.ref_pos[3:6])
+        velocity_body[:6] = np.linalg.inv(J_UV_REF.full())@ned_vel[:6]
         return velocity_body
 
     # def set_operation_space_goals(self, future_desired_body_vel, delay=True):
@@ -435,7 +441,7 @@ class Robot(Base):
         self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
         self.trajectory_poses.append(self.ref_pos.copy())
 
-        self.orient_towards_velocity()
+        # self.orient_towards_velocity()
         
         self.goal = dict()
         self.goal['ref_acc'] = self.ref_acc.tolist()

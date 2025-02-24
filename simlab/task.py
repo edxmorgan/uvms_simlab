@@ -5,7 +5,7 @@ class Task:
     def __init__(self, initial_pos):
         self.initial_pos = initial_pos
 
-    def square_velocity_uv_ref(self, t_now, T_side=10.0, speed=0.05, depth_rate=0.005):
+    def square_velocity_uv_ref(self, t_now, dt, T_side=10.0, speed=0.05, depth_rate=0.005):
         """
         Produces:
           1) A velocity vector (u, v, w, p, q, r, q1, q2, q3, q4) for a periodic square path
@@ -23,22 +23,10 @@ class Task:
             state:   np.array of shape (10,) with 
                       [x, y, z, roll, pitch, yaw, s1, s2, s3, s4]
         """
-        # ------------------------------------------
-        # 1) If first time calling, init last time & state.
-        #    We'll store a 10-element state: 
-        #    [x, y, z, roll, pitch, yaw, s1, s2, s3, s4]
-        # ------------------------------------------
-        if not hasattr(self, '_last_t'):
-            self._last_t = t_now
+
         
         if not hasattr(self, '_state'):
             self._state = self.initial_pos.copy()
-
-        # ------------------------------------------
-        # 2) Calculate dt.
-        # ------------------------------------------
-        dt = t_now - self._last_t
-        self._last_t = t_now
 
         # ------------------------------------------
         # 3) Determine which side of the square.

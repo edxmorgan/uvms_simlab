@@ -3,7 +3,8 @@ import rclpy
 from rclpy.node import Node
 import numpy as np
 import threading
-
+import random
+import time
 # Import ROS2 QoS settings and message type.
 from rclpy.qos import QoSProfile, QoSHistoryPolicy
 from uvms_interfaces.msg import Command
@@ -15,39 +16,41 @@ from pyPS4Controller.controller import Controller
 from robot import Robot
 
 
-###############################################################################
-# PS4 Controller subclass for ROS2 teleoperation.
-#
-# Mapping for ROV control:
-#   - Left analog stick (L3): surge (forward/back) and sway (left/right)
-#       (raw values normalized: (value/32767) * 20)
-#   - Right analog stick (R3): pitch and yaw (normalized to ±20)
-#   - L2 & R2 triggers: analog heave (vertical translation), normalized to ±20.
-###############################################################################
+
 class PS4Controller(Controller):
     def __init__(self, ros_node, **kwargs):
         super().__init__(**kwargs)
-        # Save a reference to the ROS node to update shared variables.
         self.ros_node = ros_node
 
-        sim_gain = 0.5
-        real_gain = 5
+        # Initialize gain variables.
+        self.gain = 5.0  # starting value
+        self.max_torque = self.gain * 2.0             # for surge/sway
+        self.heave_max_torque = self.gain * 3.0         # for heave (L2/R2)
+        self.orient_max_torque = self.gain * 0.7        # for roll, pitch, yaw
 
-        gain = real_gain
+        # Create a lock specifically for updating gain values.
+        self.gain_lock = threading.Lock()
 
-        # Gains for different DOFs
-        self.max_torque = gain*1.0             # for surge/sway
-        self.heave_max_torque = gain*3.0      # for R2 "down" heave
-        self.orient_max_torque = gain*0.2        # fOR ROLL, PITCH, YAW
-    # --- Analog stick callbacks ---
-    # Note: The pyPS4Controller library by default does not provide a combined move 
-    # event for the analog sticks. If your version does support on_L3_move and on_R3_move,
-    # these callbacks will be used. Otherwise, you may need to override the directional events 
-    # (on_L3_left, on_L3_right, etc.) and combine the axis data yourself.
-    # ---------------- L2 / R2 for Heave ----------------
-    #
+        # Start a thread to update the gain every few seconds.
+        # gain randomization for good data collection
+        self.gain_thread = threading.Thread(target=self._update_gain, daemon=True)
+        self.gain_thread.start()
+
+    def _update_gain(self):
+        """Randomize the gain value every few seconds and update the torque parameters."""
+        while True:
+            # For example, choose a new gain between 4 and 6.
+            new_gain = random.uniform(3, 8)
+            with self.gain_lock:
+                self.gain = new_gain
+                self.max_torque = self.gain * 2.0
+                self.heave_max_torque = self.gain * 3.0
+                self.orient_max_torque = self.gain * 0.7
+            # Keep this gain for 5 seconds.
+            time.sleep(5)
+
+    # --- Analog stick and button callbacks below ---
     def on_L2_press(self, value):
-        # L2 -> positive "up" heave
         scaled_value = self.heave_max_torque * (value / 32767.0)
         with self.ros_node.controller_lock:
             self.ros_node.rov_z = -scaled_value
@@ -57,7 +60,6 @@ class PS4Controller(Controller):
             self.ros_node.rov_z = 0.0
 
     def on_R2_press(self, value):
-        # R2 -> negative "down" heave
         scaled_value = self.heave_max_torque * (value / 32767.0)
         with self.ros_node.controller_lock:
             self.ros_node.rov_z = scaled_value
@@ -66,10 +68,6 @@ class PS4Controller(Controller):
         with self.ros_node.controller_lock:
             self.ros_node.rov_z = 0.0
 
-
-    #
-    # ---------------- L3 Stick for Surge & Sway ----------------
-    #
     def on_L3_up(self, value):
         scaled = self.max_torque * (value / 32767.0)
         with self.ros_node.controller_lock:
@@ -98,10 +96,6 @@ class PS4Controller(Controller):
         with self.ros_node.controller_lock:
             self.ros_node.rov_surge = 0.0
 
-
-    #
-    # ---------------- R3 Stick for Pitch & Yaw ----------------
-    #
     def on_R3_up(self, value):
         scaled = self.orient_max_torque * (value / 32767.0)
         with self.ros_node.controller_lock:
@@ -130,9 +124,6 @@ class PS4Controller(Controller):
         with self.ros_node.controller_lock:
             self.ros_node.rov_pitch = 0.0
 
-    #
-    # ---------------- Roll via L1 / R1 ----------------
-    #
     def on_L1_press(self):
         with self.ros_node.controller_lock:
             self.ros_node.rov_roll = -self.orient_max_torque
@@ -148,7 +139,6 @@ class PS4Controller(Controller):
     def on_R1_release(self):
         with self.ros_node.controller_lock:
             self.ros_node.rov_roll = 0.0
-
 
 
     #
