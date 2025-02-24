@@ -25,7 +25,7 @@ class PS4Controller(Controller):
         sim_gain = 0.5
         real_gain = 5
 
-        self.gain = real_gain
+        self.gain = sim_gain
 
         # Gains for different DOFs
         self.gain = 5.0  # starting value
@@ -263,6 +263,7 @@ class PS4TeleopNode(Node):
         self.no_efforts = self.get_parameter('no_efforts').value
         self.robots_prefix = self.get_parameter('robots_prefix').value
         self.record = self.get_parameter('record_data').value
+        self.controller = self.get_parameter('controller').value
 
         self.get_logger().info(f"Robot prefixes found: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
@@ -270,7 +271,7 @@ class PS4TeleopNode(Node):
 
         # Initialize robots (make sure your Robot class is defined properly).
         initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
-        self.robots = [Robot(self, 4, prefix, initial_pos, self.record) for prefix in self.robots_prefix]
+        self.robots = [Robot(self, 4, prefix, initial_pos, self.record, self.controller) for prefix in self.robots_prefix]
 
         # Setup a publisher with a QoS profile.
         qos_profile = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10)

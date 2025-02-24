@@ -220,7 +220,7 @@ class Manipulator(Base):
 
 
 class Robot(Base):
-    def __init__(self, node: Node, n_joint, prefix, initial_pos, record=False):
+    def __init__(self, node: Node, n_joint, prefix, initial_pos, record=False,  controller='pid'):
         self.subscription = node.create_subscription(
                 DynamicJointState,
                 'dynamic_joint_states',
@@ -285,6 +285,8 @@ class Robot(Base):
         self.status = 'inactive'
         self.sim_time = 0.0
         self.start_time = 0.0
+
+        self.use_controller = controller
 
  
         self.uvms_ll = [-1000, -1000, 0.0, -np.pi/6, -np.pi/6, -1000, 1, 0.01, 0.01, 0.01]
