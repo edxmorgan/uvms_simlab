@@ -22,7 +22,12 @@ class PS4Controller(Controller):
         super().__init__(**kwargs)
         self.ros_node = ros_node
 
-        # Initialize gain variables.
+        sim_gain = 0.5
+        real_gain = 5
+
+        self.gain = real_gain
+
+        # Gains for different DOFs
         self.gain = 5.0  # starting value
         self.max_torque = self.gain * 2.0             # for surge/sway
         self.heave_max_torque = self.gain * 3.0         # for heave (L2/R2)

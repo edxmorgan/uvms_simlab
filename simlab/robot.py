@@ -15,15 +15,8 @@ import random
 import copy
 from blue_rov import Params as blue
 from alpha_reach import Params as alpha
+
 class Base:
-    def nano_and_sec_to_sec(self, nanoseconds, seconds):
-        """Converts nanoseconds and seconds to total seconds."""
-        return seconds + (nanoseconds / 1e9)
-        
-    # def get_sim_sec(self,  msg: DynamicJointState):
-    #     total_sec = self.nano_and_sec_to_sec(msg.header.stamp.nanosec, msg.header.stamp.sec)
-    #     return total_sec
-    
     def get_interface_value(self, msg: DynamicJointState, dof_names: list, interface_names: list):
         names = msg.joint_names
         return [
@@ -440,8 +433,6 @@ class Robot(Base):
         # Accumulate reference trajectory
         self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
         self.trajectory_poses.append(self.ref_pos.copy())
-
-        # self.orient_towards_velocity()
         
         self.goal = dict()
         self.goal['ref_acc'] = self.ref_acc.tolist()
@@ -523,49 +514,7 @@ class Robot(Base):
 
         self.trajectory_path_publisher.publish(tra_path_msg)
 
-    def orient_towards_velocity(self):
-        """
-        Orient the robot to face the direction of its current positive velocity.
-        This updates the robot's reference orientation based on its body velocity.
-        """
-        vx = self.ned_vel[0]
-        vy = self.ned_vel[1]
 
-        # Compute the magnitude of the horizontal velocity
-        horizontal_speed = np.hypot(vx, vy)
-
-        # Threshold to avoid undefined behavior when velocity is near zero
-        velocity_threshold = 1e-3
-
-        if horizontal_speed > velocity_threshold:
-            desired_yaw = np.arctan2(vy, vx)
-
-            # -- Get the CURRENT yaw from the last pose in trajectory_poses
-            if len(self.trajectory_poses)>1:
-                current_yaw = self.trajectory_poses[-2][5]
-            else:
-                current_yaw = self.trajectory_poses[-1][5]
-            # -- Compute the shortest-path yaw
-            adjusted_yaw = self.adjust_desired_yaw(desired_yaw, current_yaw)
-
-            self.trajectory_poses[-1][5] = adjusted_yaw
-
-            # self.node.get_logger().info(f"Orienting towards velocity:current yaw={current_yaw} radians  desired yaw={desired_yaw} radians adjusted yaw={adjusted_yaw} radians")
-
-
-    def adjust_desired_yaw(self, desired_yaw, current_yaw):
-            # Compute the smallest angular difference
-        angle_diff = desired_yaw - current_yaw
-        angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi  # Normalize to (-π, π)
-
-        # Adjust desired_yaw to ensure the shortest rotation path
-        adjusted_desired_yaw = current_yaw + angle_diff
-
-        # # Normalize the adjusted desired yaw to [0, 2π)
-        # adjusted_desired_yaw = adjusted_desired_yaw % (2 * np.pi)
-
-        return adjusted_desired_yaw
-    
     def initiaize_data_writer(self):
             if self.record:
                 # Create a timestamp string
