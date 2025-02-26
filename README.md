@@ -24,7 +24,7 @@ source install/setup.bash
 ```
 
 Run simulation with manual mode (joystick)
-
+Make sure a PS4 joystick is connected via bluetooth.
 ```bash
 ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py use_manipulator_hardware:=false use_vehicle_hardware:=false sim_robot_count:=1 task:=manual
 ```
