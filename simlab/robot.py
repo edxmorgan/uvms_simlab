@@ -25,14 +25,15 @@ import glob
 
 
 class PS4Controller(Controller):
-    def __init__(self, ros_node, **kwargs):
+    def __init__(self, ros_node, prefix, **kwargs):
         super().__init__(**kwargs)
         self.ros_node = ros_node
 
         sim_gain = 0.5
         real_gain = 5
-
         self.gain = sim_gain
+        if 'real' in prefix:
+            self.gain = real_gain
 
         # Gains for different DOFs
         self.max_torque = self.gain * 2.0             # for surge/sway
@@ -596,6 +597,7 @@ class Robot(Base):
         # If you are not receiving analog stick events, try adjusting the event_format.
         self.ps4_controller = PS4Controller(
             ros_node=self,
+            prefix=self.prefix,
             interface=device_interface,
             connecting_using_ds4drv=False,
             event_format="3Bh2b"  # Try "LhBB" if you experience mapping issues.
