@@ -18,7 +18,7 @@ Clone this repository into the `src` folder of your ROS2 workspace and build wit
 ```bash
 cd <your_ros2_workspace>/src
 git clone https://github.com/edxmorgan/uvms_simlab.git
-cd <your_ros2_workspace>
+cd ..
 colcon build
 ```
 
