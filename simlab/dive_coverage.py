@@ -28,8 +28,7 @@ class CoverageTask(Node):
         initial_pos = np.array([0.0, 0.0, 8.0, 0,0,0, 3.1, 0.7, 0.4, 2.1])
 
 
-        self.robots_and_tasks = [(Robot(self, 4, prefix, initial_pos, self.record, controller), Task(initial_pos)) for prefix, controller in list(zip(self.robots_prefix, self.controllers))]
-
+        self.robots_and_tasks = [(Robot(self, k, 4, prefix, initial_pos, self.record, controller), Task(initial_pos)) for k, (prefix, controller) in enumerate(list(zip(self.robots_prefix, self.controllers)))]
         qos_profile = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=10
