@@ -16,6 +16,235 @@ import copy
 from blue_rov import Params as blue
 from alpha_reach import Params as alpha
 
+# Import the PS4 controller library.
+from pyPS4Controller.controller import Controller
+import threading
+import random
+import time
+import glob
+
+
+class PS4Controller(Controller):
+    def __init__(self, ros_node, **kwargs):
+        super().__init__(**kwargs)
+        self.ros_node = ros_node
+
+        sim_gain = 0.5
+        real_gain = 5
+
+        self.gain = sim_gain
+
+        # Gains for different DOFs
+        self.max_torque = self.gain * 2.0             # for surge/sway
+        self.heave_max_torque = self.gain * 3.0         # for heave (L2/R2)
+        self.orient_max_torque = self.gain * 0.7        # for roll, pitch, yaw
+
+        # # Create a lock specifically for updating gain values.
+        # self.gain_lock = threading.Lock()
+
+        # # Start a thread to update the gain every few seconds.
+        # # gain randomization for good data collection
+        # self.gain_thread = threading.Thread(target=self._update_gain, daemon=True)
+        # self.gain_thread.start()
+
+    # def _update_gain(self):
+    #     """Randomize the gain value every few seconds and update the torque parameters."""
+    #     while True:
+    #         # For example, choose a new gain between 4 and 6.
+    #         new_gain = random.uniform(3, 8)
+    #         with self.gain_lock:
+    #             self.gain = new_gain
+    #             self.max_torque = self.gain * 2.0
+    #             self.heave_max_torque = self.gain * 3.0
+    #             self.orient_max_torque = self.gain * 0.7
+    #         # Keep this gain for 5 seconds.
+    #         time.sleep(5)
+
+    # --- Analog stick and button callbacks below ---
+    def on_L2_press(self, value):
+        scaled_value = self.heave_max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_z = -scaled_value
+
+    def on_L2_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_z = 0.0
+
+    def on_R2_press(self, value):
+        scaled_value = self.heave_max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_z = scaled_value
+
+    def on_R2_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_z = 0.0
+
+    def on_L3_up(self, value):
+        scaled = self.max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_surge = -scaled
+
+    def on_L3_down(self, value):
+        scaled = self.max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_surge = -scaled
+
+    def on_L3_right(self, value):
+        scaled = self.max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_sway = scaled
+
+    def on_L3_left(self, value):
+        scaled = self.max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_sway = scaled
+
+    def on_L3_x_at_rest(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_sway = 0.0
+
+    def on_L3_y_at_rest(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_surge = 0.0
+
+    def on_R3_up(self, value):
+        scaled = self.orient_max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_pitch = scaled
+
+    def on_R3_down(self, value):
+        scaled = self.orient_max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_pitch = scaled
+
+    def on_R3_left(self, value):
+        scaled = self.orient_max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_yaw = scaled
+
+    def on_R3_right(self, value):
+        scaled = self.orient_max_torque * (value / 32767.0)
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_yaw = scaled
+
+    def on_R3_x_at_rest(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_yaw = 0.0
+
+    def on_R3_y_at_rest(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_pitch = 0.0
+
+    def on_L1_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_roll = -self.orient_max_torque
+
+    def on_L1_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_roll = 0.0
+
+    def on_R1_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_roll = self.orient_max_torque
+
+    def on_R1_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.rov_roll = 0.0
+
+
+    #
+    # ---------------- Manipulator Controls ----------------
+    # Mapping:
+    #   - Manipulator index 0 (left/right):  
+    #       on_left_arrow_press  → -1.0  
+    #       on_right_arrow_press → +1.0  
+    #       on_left_right_arrow_release → 0.0  
+    #
+    #   - Manipulator index 1 (up/down):  
+    #       on_up_arrow_press   → +1.0  
+    #       on_down_arrow_press → -1.0  
+    #       on_up_down_arrow_release → 0.0  
+    #
+    #   - Indices 2, 3, and 4 remain unchanged.
+    #
+    # Manipulator index 0 (left/right):
+    def on_left_arrow_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointe = -3.0
+
+    def on_right_arrow_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointe = 3.0
+
+    def on_left_right_arrow_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointe = 0.0
+
+    # Manipulator index 1 (up/down):
+    def on_up_arrow_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointd = 2.0
+
+    def on_down_arrow_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointd = -2.0
+
+    def on_up_down_arrow_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointd = 0.0
+
+    # Manipulator index 2: Triangle (positive) / X (negative)
+    def on_triangle_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointc = 2.0
+
+    def on_triangle_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointc = 0.0
+
+    def on_x_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointc = -2.0
+
+    def on_x_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointc = 0.0
+
+    # Manipulator index 3: Square (positive) / Circle (negative)
+    def on_square_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointb = 1.0
+
+    def on_square_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointb = 0.0
+
+    def on_circle_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointb = -1.0
+
+    def on_circle_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointb = 0.0
+
+    # Manipulator index 4: Options (positive) / Share (negative)
+    def on_R3_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointa = 1.0
+
+    def on_R3_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointa = 0.0
+
+    def on_L3_press(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointa = -1.0
+
+    def on_L3_release(self):
+        with self.ros_node.controller_lock:
+            self.ros_node.jointa = 0.0
+            
+
 class Base:
     def get_interface_value(self, msg: DynamicJointState, dof_names: list, interface_names: list):
         names = msg.joint_names
@@ -220,13 +449,14 @@ class Manipulator(Base):
 
 
 class Robot(Base):
-    def __init__(self, node: Node, n_joint, prefix, initial_pos, record=False,  controller='pid'):
+    def __init__(self, node: Node, k_robot, n_joint, prefix, initial_pos, record=False,  controller='pid'):
         self.subscription = node.create_subscription(
                 DynamicJointState,
                 'dynamic_joint_states',
                 self.listener_callback,
                 10
             )
+        self.k_robot = k_robot
         self.subscription  # prevent unused variable warning
     
         package_share_directory = ament_index_python.get_package_share_directory(
@@ -331,7 +561,55 @@ class Robot(Base):
         self.record = record
 
         self.initiaize_data_writer()
-    
+
+
+        # Search for joystick device in /dev/input
+        device_interface = f"/dev/input/js{self.k_robot}"
+        self.has_joystick_interface = False
+        joystick_device = glob.glob(device_interface)
+
+        if device_interface in joystick_device:
+            self.node.get_logger().info(f"Found joystick device: {device_interface}")
+            self.start_joystick(device_interface)
+            self.has_joystick_interface = True
+        else:
+            self.node.get_logger().info(f"No joystick device found for robot {self.k_robot}.")
+
+
+    def start_joystick(self, device_interface):
+        # Shared variables updated by the PS4 controller callbacks.
+        self.controller_lock = threading.Lock()
+        self.rov_surge = 0.0      # Left stick horizontal (sway)
+        self.rov_sway = 0.0      # Left stick vertical (surge)
+        self.rov_z = 0.0      # Heave from triggers
+        self.rov_roll = 0.0   # roll
+        self.rov_pitch = 0.0  # Right stick vertical (pitch)
+        self.rov_yaw = 0.0    # Right stick horizontal (yaw)
+
+        self.jointe = 0.0
+        self.jointd = 0.0
+        self.jointc = 0.0
+        self.jointb = 0.0
+        self.jointa = 0.0
+
+        # Instantiate the PS4 controller.
+        # If you are not receiving analog stick events, try adjusting the event_format.
+        self.ps4_controller = PS4Controller(
+            ros_node=self,
+            interface=device_interface,
+            connecting_using_ds4drv=False,
+            event_format="3Bh2b"  # Try "LhBB" if you experience mapping issues.
+        )
+        # Enable debug mode to print raw event data.
+        self.ps4_controller.debug = True
+
+        # Start the PS4 controller listener in a separate (daemon) thread.
+        self.controller_thread = threading.Thread(target=self.ps4_controller.listen, daemon=True)
+        self.controller_thread.start()
+
+        self.node.get_logger().info(f"PS4 Teleop node initialized for robot {self.k_robot} to be control with js{self.k_robot}.")
+
+
     def update_state(self, msg: DynamicJointState):
         self.arm.update_state(msg)
         self.ned_pose = self.get_interface_value(
@@ -435,7 +713,7 @@ class Robot(Base):
         # Accumulate reference trajectory
         self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
         self.trajectory_poses.append(self.ref_pos.copy())
-        
+
         self.goal = dict()
         self.goal['ref_acc'] = self.ref_acc.tolist()
         self.goal['ref_vel'] = self.trajectory_twist[-1]
@@ -516,6 +794,48 @@ class Robot(Base):
 
         self.trajectory_path_publisher.publish(tra_path_msg)
 
+    def orient_towards_velocity(self):
+        """
+        Orient the robot to face the direction of its current positive velocity.
+        This updates the robot's reference orientation based on its body velocity.
+        """
+        vx = self.ned_vel[0]
+        vy = self.ned_vel[1]
+
+        # Compute the magnitude of the horizontal velocity
+        horizontal_speed = np.hypot(vx, vy)
+
+        # Threshold to avoid undefined behavior when velocity is near zero
+        velocity_threshold = 1e-3
+
+        if horizontal_speed > velocity_threshold:
+            desired_yaw = np.arctan2(vy, vx)
+
+            # -- Get the CURRENT yaw from the last pose in trajectory_poses
+            if len(self.trajectory_poses)>1:
+                current_yaw = self.trajectory_poses[-2][5]
+            else:
+                current_yaw = self.trajectory_poses[-1][5]
+            # -- Compute the shortest-path yaw
+            adjusted_yaw = self.adjust_desired_yaw(desired_yaw, current_yaw)
+
+            self.trajectory_poses[-1][5] = adjusted_yaw
+
+            # self.node.get_logger().info(f"Orienting towards velocity:current yaw={current_yaw} radians  desired yaw={desired_yaw} radians adjusted yaw={adjusted_yaw} radians")
+
+
+    def adjust_desired_yaw(self, desired_yaw, current_yaw):
+            # Compute the smallest angular difference
+        angle_diff = desired_yaw - current_yaw
+        angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi  # Normalize to (-π, π)
+
+        # Adjust desired_yaw to ensure the shortest rotation path
+        adjusted_desired_yaw = current_yaw + angle_diff
+
+        # # Normalize the adjusted desired yaw to [0, 2π)
+        # adjusted_desired_yaw = adjusted_desired_yaw % (2 * np.pi)
+
+        return adjusted_desired_yaw
 
     def initiaize_data_writer(self):
             if self.record:

@@ -18,7 +18,8 @@ class CoverageTask(Node):
         self.no_efforts = self.get_parameter('no_efforts').value
         self.robots_prefix = self.get_parameter('robots_prefix').value
         self.record = self.get_parameter('record_data').value
-        self.controller = self.get_parameter('controller').value
+        self.controllers = self.get_parameter('controllers').value
+        self.get_logger().info(f"robots controllers : {self.controllers}")
 
         self.get_logger().info(f"robot prefixes found in task node: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
@@ -27,7 +28,7 @@ class CoverageTask(Node):
         initial_pos = np.array([0.0, 0.0, 8.0, 0,0,0, 3.1, 0.7, 0.4, 2.1])
 
 
-        self.robots_and_tasks = [(Robot(self, 4, prefix, initial_pos, self.record, self.controller), Task(initial_pos)) for prefix in self.robots_prefix]
+        self.robots_and_tasks = [(Robot(self, 4, prefix, initial_pos, self.record, controller), Task(initial_pos)) for prefix, controller in list(zip(self.robots_prefix, self.controllers))]
 
         qos_profile = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
@@ -43,7 +44,7 @@ class CoverageTask(Node):
 
     def timer_callback(self):
         command_msg = Command()
-        command_msg.command_type = "pid"
+        command_msg.command_type = self.controllers
         command_msg.acceleration.data = []
         command_msg.twist.data = []
         command_msg.pose.data = []
@@ -55,7 +56,7 @@ class CoverageTask(Node):
                 sim_t = state['sim_time']
                 sim_dt = state['dt']
 
-                ref_ned_vel, ref_ned_pos = task.square_velocity_uv_ref(sim_t, sim_dt, T_side=100.0, speed=0.3) #task
+                ref_ned_vel, ref_ned_pos = task.square_velocity_uv_ref(sim_t, T_side=40.0, speed=0.1) #task
 
                 robot.set_robot_goals(ref_ned_vel, ref_ned_pos)
                 robot.publish_reference_path()
@@ -77,6 +78,7 @@ class CoverageTask(Node):
                     robot.trajectory_poses.pop(0)
                 
         # Publish the command
+        # self.get_logger().info(f'{command_msg.pose.data}')
         self.uvms_publisher_.publish(command_msg)
 
     def destroy_node(self):

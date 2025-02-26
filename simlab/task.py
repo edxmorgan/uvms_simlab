@@ -1,78 +1,77 @@
-# task.py
 import numpy as np
 
 class Task:
     def __init__(self, initial_pos):
         self.initial_pos = initial_pos
 
-    def square_velocity_uv_ref(self, t_now, dt, T_side=10.0, speed=0.05, depth_rate=0.005):
+    def square_velocity_uv_ref(self, t_now, T_side=10.0, speed=0.05, depth_rate=0.005):
         """
         Produces:
           1) A velocity vector (u, v, w, p, q, r, q1, q2, q3, q4) for a periodic square path
-             in the XY-plane, with an additional constant descent rate along Z,
-          2) The integrated state [x, y, z, roll, pitch, yaw, s1, s2, s3, s4] where
-             s1..s4 correspond to q1..q4 (or any other states you want to integrate).
+             in the XY-plane, with an additional constant descent rate along Z.
+          2) The integrated state [x, y, z, roll, pitch, yaw, s1, s2, s3, s4],
+             where s1..s4 correspond to q1..q4 (or any other states you want to integrate).
+
+        In this modified version, the XY positions are computed directly from the time,
+        ensuring that the length of each side is exactly fixed to:
+          side_length = speed * T_side
 
         :param t_now: Current time (in seconds)
         :param T_side: Time (in seconds) for one side of the square.
         :param speed: Desired linear speed along a side.
         :param depth_rate: The constant rate (in m/s) at which depth (z) decreases.
         :return:
-            velocity: np.array of shape (10,) with 
-                      [u, v, w, p, q, r, q1, q2, q3, q4]
-            state:   np.array of shape (10,) with 
-                      [x, y, z, roll, pitch, yaw, s1, s2, s3, s4]
+            velocity: np.array of shape (10,) with [u, v, w, p, q, r, q1, q2, q3, q4]
+            state:   np.array of shape (10,) with [x, y, z, roll, pitch, yaw, s1, s2, s3, s4]
         """
+        # Compute side length exactly.
+        side_length = speed * T_side
 
-        
-        if not hasattr(self, '_state'):
-            self._state = self.initial_pos.copy()
-
-        # ------------------------------------------
-        # 3) Determine which side of the square.
-        # ------------------------------------------
+        # Determine which side and the time within that side.
         cycle_time = 4.0 * T_side
         t_mod = t_now % cycle_time
+        side_index = int(t_mod // T_side)
+        t_in_side = t_mod % T_side
 
-        # ------------------------------------------
-        # 4) Initialize velocity vector: 
-        #    [u, v, w, p, q, r, q1, q2, q3, q4]
-        # ------------------------------------------
+        # Initialize the velocity vector.
         velocity = np.zeros(10, dtype=float)
 
-        # ------------------------------------------
-        # 5) Piecewise constant velocity for X and Y directions:
-        #    - Side 1: +X
-        #    - Side 2: +Y
-        #    - Side 3: -X
-        #    - Side 4: -Y
-        # ------------------------------------------
-        if 0 <= t_mod < T_side:
-            velocity[0] = speed   # move in +X direction
-        elif T_side <= t_mod < 2 * T_side:
-            velocity[1] = speed   # move in +Y direction
-        elif 2 * T_side <= t_mod < 3 * T_side:
-            velocity[0] = -speed  # move in -X direction
+        # Calculate x, y offsets and corresponding velocities based on the current side.
+        if side_index == 0:
+            # Moving in +X direction.
+            x_offset = t_in_side * speed
+            y_offset = 0.0
+            velocity[0] = speed
+        elif side_index == 1:
+            # Moving in +Y direction.
+            x_offset = side_length
+            y_offset = t_in_side * speed
+            velocity[1] = speed
+        elif side_index == 2:
+            # Moving in -X direction.
+            x_offset = side_length - t_in_side * speed
+            y_offset = side_length
+            velocity[0] = -speed
         else:
-            velocity[1] = -speed  # move in -Y direction
+            # Moving in -Y direction.
+            x_offset = 0.0
+            y_offset = side_length - t_in_side * speed
+            velocity[1] = -speed
 
-        # ------------------------------------------
-        # 6) Add a constant downward (decreasing depth) velocity
-        # ------------------------------------------
+        # Set constant downward velocity.
         velocity[2] = -depth_rate
 
-        # ------------------------------------------
-        # 7) Integrate velocity to update state.
-        #    state[i] = state[i] + velocity[i] * dt
-        # ------------------------------------------
-        for i in range(10):
-            self._state[i] += velocity[i] * dt
+        # Instead of integrating XY from the previous state, compute them directly.
+        state = self.initial_pos.copy()
+        state[0] = self.initial_pos[0] + x_offset
+        state[1] = self.initial_pos[1] + y_offset
 
-        # Ensure z (state[2]) does not drop below zero.
-        if self._state[2] < 0:
-            self._state[2] = 0
+        # For the depth, you can either integrate or compute directly.
+        # Here, we compute it directly so that the descent is exact:
+        new_depth = self.initial_pos[2] - depth_rate * t_now
+        state[2] = new_depth if new_depth >= 0 else 0
 
-        # ------------------------------------------
-        # 8) Return velocity & the new integrated state.
-        # ------------------------------------------
-        return velocity.flatten(), self._state.copy().flatten()
+        # Optionally, if you have other states (e.g. orientation, s1-s4), you can update them as needed.
+        # For now, we'll leave them unchanged.
+
+        return velocity.flatten(), state.flatten()

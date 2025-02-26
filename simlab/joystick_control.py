@@ -2,241 +2,15 @@
 import rclpy
 from rclpy.node import Node
 import numpy as np
-import threading
-import random
-import time
+
 # Import ROS2 QoS settings and message type.
 from rclpy.qos import QoSProfile, QoSHistoryPolicy
 from uvms_interfaces.msg import Command
 
-# Import the PS4 controller library.
-from pyPS4Controller.controller import Controller
-
-# Import your robot class (make sure you have this implemented elsewhere).
+# Import your robot class
 from robot import Robot
 
 
-
-class PS4Controller(Controller):
-    def __init__(self, ros_node, **kwargs):
-        super().__init__(**kwargs)
-        self.ros_node = ros_node
-
-        sim_gain = 0.5
-        real_gain = 5
-
-        self.gain = sim_gain
-
-        # Gains for different DOFs
-        self.gain = 5.0  # starting value
-        self.max_torque = self.gain * 2.0             # for surge/sway
-        self.heave_max_torque = self.gain * 3.0         # for heave (L2/R2)
-        self.orient_max_torque = self.gain * 0.7        # for roll, pitch, yaw
-
-        # Create a lock specifically for updating gain values.
-        self.gain_lock = threading.Lock()
-
-        # Start a thread to update the gain every few seconds.
-        # gain randomization for good data collection
-        self.gain_thread = threading.Thread(target=self._update_gain, daemon=True)
-        self.gain_thread.start()
-
-    def _update_gain(self):
-        """Randomize the gain value every few seconds and update the torque parameters."""
-        while True:
-            # For example, choose a new gain between 4 and 6.
-            new_gain = random.uniform(3, 8)
-            with self.gain_lock:
-                self.gain = new_gain
-                self.max_torque = self.gain * 2.0
-                self.heave_max_torque = self.gain * 3.0
-                self.orient_max_torque = self.gain * 0.7
-            # Keep this gain for 5 seconds.
-            time.sleep(5)
-
-    # --- Analog stick and button callbacks below ---
-    def on_L2_press(self, value):
-        scaled_value = self.heave_max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_z = -scaled_value
-
-    def on_L2_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_z = 0.0
-
-    def on_R2_press(self, value):
-        scaled_value = self.heave_max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_z = scaled_value
-
-    def on_R2_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_z = 0.0
-
-    def on_L3_up(self, value):
-        scaled = self.max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_surge = -scaled
-
-    def on_L3_down(self, value):
-        scaled = self.max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_surge = -scaled
-
-    def on_L3_right(self, value):
-        scaled = self.max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_sway = scaled
-
-    def on_L3_left(self, value):
-        scaled = self.max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_sway = scaled
-
-    def on_L3_x_at_rest(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_sway = 0.0
-
-    def on_L3_y_at_rest(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_surge = 0.0
-
-    def on_R3_up(self, value):
-        scaled = self.orient_max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_pitch = scaled
-
-    def on_R3_down(self, value):
-        scaled = self.orient_max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_pitch = scaled
-
-    def on_R3_left(self, value):
-        scaled = self.orient_max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_yaw = scaled
-
-    def on_R3_right(self, value):
-        scaled = self.orient_max_torque * (value / 32767.0)
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_yaw = scaled
-
-    def on_R3_x_at_rest(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_yaw = 0.0
-
-    def on_R3_y_at_rest(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_pitch = 0.0
-
-    def on_L1_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_roll = -self.orient_max_torque
-
-    def on_L1_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_roll = 0.0
-
-    def on_R1_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_roll = self.orient_max_torque
-
-    def on_R1_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.rov_roll = 0.0
-
-
-    #
-    # ---------------- Manipulator Controls ----------------
-    # Mapping:
-    #   - Manipulator index 0 (left/right):  
-    #       on_left_arrow_press  → -1.0  
-    #       on_right_arrow_press → +1.0  
-    #       on_left_right_arrow_release → 0.0  
-    #
-    #   - Manipulator index 1 (up/down):  
-    #       on_up_arrow_press   → +1.0  
-    #       on_down_arrow_press → -1.0  
-    #       on_up_down_arrow_release → 0.0  
-    #
-    #   - Indices 2, 3, and 4 remain unchanged.
-    #
-    # Manipulator index 0 (left/right):
-    def on_left_arrow_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointe = -3.0
-
-    def on_right_arrow_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointe = 3.0
-
-    def on_left_right_arrow_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointe = 0.0
-
-    # Manipulator index 1 (up/down):
-    def on_up_arrow_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointd = 2.0
-
-    def on_down_arrow_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointd = -2.0
-
-    def on_up_down_arrow_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointd = 0.0
-
-    # Manipulator index 2: Triangle (positive) / X (negative)
-    def on_triangle_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointc = 2.0
-
-    def on_triangle_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointc = 0.0
-
-    def on_x_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointc = -2.0
-
-    def on_x_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointc = 0.0
-
-    # Manipulator index 3: Square (positive) / Circle (negative)
-    def on_square_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointb = 1.0
-
-    def on_square_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointb = 0.0
-
-    def on_circle_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointb = -1.0
-
-    def on_circle_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointb = 0.0
-
-    # Manipulator index 4: Options (positive) / Share (negative)
-    def on_R3_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointa = 1.0
-
-    def on_R3_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointa = 0.0
-
-    def on_L3_press(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointa = -1.0
-
-    def on_L3_release(self):
-        with self.ros_node.controller_lock:
-            self.ros_node.jointa = 0.0
 ###############################################################################
 # ROS2 Node that uses the PS4 controller for ROV teleoperation.
 #
@@ -253,6 +27,7 @@ class PS4Controller(Controller):
 #
 # Total command for each robot is 11 elements.
 ###############################################################################
+
 class PS4TeleopNode(Node):
     def __init__(self):
         super().__init__('ps4_teleop_node',
@@ -263,7 +38,6 @@ class PS4TeleopNode(Node):
         self.no_efforts = self.get_parameter('no_efforts').value
         self.robots_prefix = self.get_parameter('robots_prefix').value
         self.record = self.get_parameter('record_data').value
-        self.controller = self.get_parameter('controller').value
 
         self.get_logger().info(f"Robot prefixes found: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
@@ -271,7 +45,7 @@ class PS4TeleopNode(Node):
 
         # Initialize robots (make sure your Robot class is defined properly).
         initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
-        self.robots = [Robot(self, 4, prefix, initial_pos, self.record, self.controller) for prefix in self.robots_prefix]
+        self.robots = [Robot(self, k, 4, prefix, initial_pos, self.record) for k, prefix in enumerate(self.robots_prefix)]
 
         # Setup a publisher with a QoS profile.
         qos_profile = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10)
@@ -281,71 +55,43 @@ class PS4TeleopNode(Node):
         frequency = 1000  # Hz
         self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
 
-        # Shared variables updated by the PS4 controller callbacks.
-        self.controller_lock = threading.Lock()
-        self.rov_surge = 0.0      # Left stick horizontal (sway)
-        self.rov_sway = 0.0      # Left stick vertical (surge)
-        self.rov_z = 0.0      # Heave from triggers
-        self.rov_roll = 0.0   # roll
-        self.rov_pitch = 0.0  # Right stick vertical (pitch)
-        self.rov_yaw = 0.0    # Right stick horizontal (yaw)
-
-        self.jointe = 0.0
-        self.jointd = 0.0
-        self.jointc = 0.0
-        self.jointb = 0.0
-        self.jointa = 0.0
-
-        # Instantiate the PS4 controller.
-        # If you are not receiving analog stick events, try adjusting the event_format.
-        self.ps4_controller = PS4Controller(
-            ros_node=self,
-            interface="/dev/input/js0",
-            connecting_using_ds4drv=False,
-            event_format="3Bh2b"  # Try "LhBB" if you experience mapping issues.
-        )
-        # Enable debug mode to print raw event data.
-        self.ps4_controller.debug = True
-
-        # Start the PS4 controller listener in a separate (daemon) thread.
-        self.controller_thread = threading.Thread(target=self.ps4_controller.listen, daemon=True)
-        self.controller_thread.start()
-
-        self.get_logger().info("PS4 Teleop node initialized for ROV control with normalized scaling.")
 
     def timer_callback(self):
         # Create a new command message.
         command_msg = Command()
-        command_msg.command_type = "force"
-
-        # Safely acquire the latest controller values.
-        with self.controller_lock:
-            surge = self.rov_surge
-            sway = self.rov_sway
-            heave = self.rov_z
-            roll = self.rov_roll
-            pitch = self.rov_pitch
-            yaw = self.rov_yaw
-
-            e_joint= self.jointe
-            d_joint= self.jointd
-            c_joint= self.jointc
-            b_joint= self.jointb
-            a_joint= self.jointa
-
-
-        rov_command = [surge, sway, heave, roll, pitch, yaw]
-        manipulator_command = [e_joint, d_joint, c_joint, b_joint, a_joint] #[0]*5 # Manipulator command (unused).
-
+        command_msg.command_type = ["force"]*self.no_robot
+       
         # Build the full command list for all robots.
         data = []
         for robot in self.robots:
+            [surge, sway, heave, roll, pitch, yaw] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            [e_joint, d_joint, c_joint, b_joint, a_joint] = [0.0, 0.0, 0.0, 0.0, 0.0]
+
+            if robot.has_joystick_interface:
+                # Safely acquire the latest controller values.
+                with robot.controller_lock:
+                    surge = robot.rov_surge
+                    sway = robot.rov_sway
+                    heave = robot.rov_z
+                    roll = robot.rov_roll
+                    pitch = robot.rov_pitch
+                    yaw = robot.rov_yaw
+
+                    e_joint= robot.jointe
+                    d_joint= robot.jointd
+                    c_joint= robot.jointc
+                    b_joint= robot.jointb
+                    a_joint= robot.jointa
+
+
+            rov_command = [surge, sway, heave, roll, pitch, yaw]
+            manipulator_command = [e_joint, d_joint, c_joint, b_joint, a_joint] #[0]*5 # Manipulator command (unused).
+
             robot.write_data_to_file()
             # robot.publish_robot_path()  # Assumes each Robot instance handles its own publishing.
             data.extend(rov_command + manipulator_command)
 
         command_msg.force.data = [float(value) for value in data]
-
         # Publish the command.
         self.publisher_.publish(command_msg)
 
