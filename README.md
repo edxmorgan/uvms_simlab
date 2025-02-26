@@ -1,6 +1,6 @@
 # uvms_simlab
 
-uvms_simlab extends [uvms-simulator](https://github.com/edxmorgan/uvms_simulator) by adding PS4 joystick support for teleoperation as well as capabilities for executing coverage plans in simulation or on real hardware.
+uvms_simlab extends [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) by adding PS4 joystick support for teleoperation as well as capabilities for executing coverage plans in simulation or on real hardware.
 
 ## Dependencies
 
