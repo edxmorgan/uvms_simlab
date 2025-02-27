@@ -1,6 +1,6 @@
 # uvms_simlab
 
-**uvms_simlab** extends [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) by adding PS4 joystick support for teleoperation as well as capabilities for executing coverage plans in simulation or on real hardware.
+**uvms_simlab** extends [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) by adding PS4 joystick support for teleoperation as well as capabilities for executing coverage plans and interactive control via markers in simulation or on real hardware.
 
 ---
 
@@ -55,6 +55,15 @@ To run the simulation with coverage execution:
 ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
     use_manipulator_hardware:=false use_vehicle_hardware:=false \
     sim_robot_count:=1 task:=coverage
+```
+
+### Interactive Markers Control
+
+Interactive markers for control are now available. This mode allows you to interactively control the system using markers displayed in rviz. To enable this mode, run:
+```bash
+ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
+    use_manipulator_hardware:=false use_vehicle_hardware:=false \
+    sim_robot_count:=1 task:=interactive
 ```
 
 ---

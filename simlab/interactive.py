@@ -29,10 +29,10 @@ class BasicControlsNode(Node):
         self.menu_handler = MenuHandler()
 
         # Set up the menu entries
-        self.menu_handler.insert("robots execute", callback=self.processFeedback)
+        self.menu_handler.insert("execute", callback=self.processFeedback)
         sub_menu_handle = self.menu_handler.insert("Robots")
         for prefix in self.robots_prefix:
-            sub_sub_menu_handle = self.menu_handler.insert(f"{prefix}execute", parent=sub_menu_handle, callback=self.processFeedback)
+            sub_sub_menu_handle = self.menu_handler.insert(f"{prefix}plan", parent=sub_menu_handle, callback=self.processFeedback)
 
         # Create a 6-DOF marker using MOVE_ROTATE_3D with additional axis controls, combined with a menu.
         self.make6DofMarker(False, InteractiveMarkerControl.MOVE_ROTATE_3D, Point(x=0.0, y=0.0, z=0.0), show_6dof=True)
