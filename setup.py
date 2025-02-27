@@ -36,14 +36,9 @@ setup(
     entry_points={
         'console_scripts': [
             'joystick_controller = simlab.joystick_control:main',
-            'sensor_py_node = simlab.sensor:main',
-            'excite_py_node = simlab.excite_effort:main',
             'coverage_node = simlab.dive_coverage:main',
-            'shape_formation_node = simlab.shape_formation:main',
-            'station_node = simlab.station:main',
-            'ik_solve_node = simlab.ik_solve:main',
             'pwm_test_node = simlab.pwm_test:main',
-            'pid_metrics_node = simlab.pid_metrics:main'
+            'interactive_marker_node = simlab.interactive:main',
         ],
     },
 )
