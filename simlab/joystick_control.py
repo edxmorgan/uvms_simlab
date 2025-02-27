@@ -64,6 +64,7 @@ class PS4TeleopNode(Node):
         # Build the full command list for all robots.
         data = []
         for robot in self.robots:
+            robot.publish_robot_path()
             [surge, sway, heave, roll, pitch, yaw] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
             [e_joint, d_joint, c_joint, b_joint, a_joint] = [0.0, 0.0, 0.0, 0.0, 0.0]
 

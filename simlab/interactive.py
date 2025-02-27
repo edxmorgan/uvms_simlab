@@ -291,7 +291,7 @@ class BasicControlsNode(Node):
         menu_control = InteractiveMarkerControl()
         menu_control.interaction_mode = InteractiveMarkerControl.MENU
         menu_control.name = "robots_control_menu"
-        menu_control.description = "options"
+        menu_control.description = "target"
         menu_control.always_visible = True
         int_marker.controls.append(copy.deepcopy(menu_control))
 
