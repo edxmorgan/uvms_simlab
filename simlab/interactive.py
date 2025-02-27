@@ -22,6 +22,10 @@ def quaternion_to_euler(orientation):
     roll, pitch, yaw = r.as_euler('xyz', degrees=False)
     return roll, pitch, yaw
 
+def normalize_angle(angle):
+    # Normalize an angle to [-pi, pi]
+    return (angle + math.pi) % (2 * math.pi) - math.pi
+
 class BasicControlsNode(Node):
     def __init__(self):
         super().__init__('uvms_interactive_controls',
@@ -98,22 +102,35 @@ class BasicControlsNode(Node):
                     y_ned = -y_nwu
                     z_ned = -z_nwu
 
-                    # Convert orientation from NWU to NED:
-                    # Apply conversion (here we simply invert pitch and yaw for NED).
-                    roll_ned = roll_nwu
-                    pitch_ned = -pitch_nwu
-                    yaw_ned = -yaw_nwu
+                    # Convert orientation from NWU to NED.
+                    # (Here we invert pitch and yaw; roll remains the same.)
+                    # These are our absolute target angles in NED.
+                    raw_roll_ned = roll_nwu
+                    raw_pitch_ned = -pitch_nwu
+                    raw_yaw_ned = -yaw_nwu
 
-                    # Log the converted values.
+                    # Get current orientation (assuming state['pose'][3:6] are [roll, pitch, yaw] in NED).
+                    curr_roll, curr_pitch, curr_yaw = state['pose'][3:6]
+
+                    # Compute minimal differences.
+                    delta_roll = normalize_angle(raw_roll_ned - curr_roll)
+                    delta_pitch = normalize_angle(raw_pitch_ned - curr_pitch)
+                    delta_yaw = normalize_angle(raw_yaw_ned - curr_yaw)
+
+                    # The new target angles are the current ones plus the minimal difference.
+                    target_roll = curr_roll + delta_roll
+                    target_pitch = curr_pitch + delta_pitch
+                    target_yaw = curr_yaw + delta_yaw
+
                     self.get_logger().debug(
-                        f"Executing plan for robot {self.robots_prefix[k]}: "
-                        f"NWU pose: ({x_nwu:.2f}, {y_nwu:.2f}, {z_nwu:.2f}, {roll_nwu:.2f}, {pitch_nwu:.2f}, {yaw_nwu:.2f}) | "
-                        f"NED pose: ({x_ned:.2f}, {y_ned:.2f}, {z_ned:.2f}, {roll_ned:.2f}, {pitch_ned:.2f}, {yaw_ned:.2f})"
+                        f"Executing plan for robot {self.robots_prefix[k]}: NWU pose: "
+                        f"({x_nwu:.2f}, {y_nwu:.2f}, {z_nwu:.2f}, {roll_nwu:.2f}, {pitch_nwu:.2f}, {yaw_nwu:.2f}) | "
+                        f"Raw NED: ({x_ned:.2f}, {y_ned:.2f}, {z_ned:.2f}, {raw_roll_ned:.2f}, {raw_pitch_ned:.2f}, {raw_yaw_ned:.2f}) | "
+                        f"Target NED: ({x_ned:.2f}, {y_ned:.2f}, {z_ned:.2f}, {target_roll:.2f}, {target_pitch:.2f}, {target_yaw:.2f})"
                     )
 
                     q0, q1, q2, q3 = state['q']
-                    # Use the NED values in the command message.
-                    command_msg.pose.data.extend([x_ned, y_ned, z_ned, roll_ned, pitch_ned, yaw_ned, q0, q1, q2, q3, 0.0])
+                    command_msg.pose.data.extend([x_ned, y_ned, z_ned, target_roll, target_pitch, target_yaw, q0, q1, q2, q3, 0.0])
 
                     # For error check, compare current NWU state with the planned NWU target.
                     current_pos = np.array(state['pose'][:3])
@@ -203,6 +220,7 @@ class BasicControlsNode(Node):
 
         if show_6dof:
             # Add additional axis controls (rotation and translation along X, Y, and Z)
+            # Uncomment any controls you wish to include.
             # control = InteractiveMarkerControl()
             # control.orientation.w = 1.0
             # control.orientation.x = 1.0
