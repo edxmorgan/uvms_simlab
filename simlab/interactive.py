@@ -7,6 +7,8 @@ from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, InteractiveMarker, InteractiveMarkerControl, InteractiveMarkerFeedback
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer
 from interactive_markers.menu_handler import MenuHandler
+from rclpy.qos import QoSProfile, QoSHistoryPolicy
+from uvms_interfaces.msg import Command
 
 class BasicControlsNode(Node):
     def __init__(self):
@@ -24,6 +26,17 @@ class BasicControlsNode(Node):
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"robots total number of commands : {self.total_no_efforts}")
 
+        qos_profile = QoSProfile(
+                    history=QoSHistoryPolicy.KEEP_LAST,
+                    depth=10
+                )
+
+        self.uvms_publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', qos_profile)
+
+        frequency = 150  # Hz
+        self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
+        self.get_logger().info("CoverageTask node has been initialized with optimal control.")
+
         # Create the interactive marker server and menu handler
         self.server = InteractiveMarkerServer(self, "uvms_interactive_controls")
         self.menu_handler = MenuHandler()
@@ -32,13 +45,27 @@ class BasicControlsNode(Node):
         self.menu_handler.insert("execute", callback=self.processFeedback)
         sub_menu_handle = self.menu_handler.insert("Robots")
         for prefix in self.robots_prefix:
-            sub_sub_menu_handle = self.menu_handler.insert(f"{prefix}plan", parent=sub_menu_handle, callback=self.processFeedback)
+            self.menu_handler.insert(f"{prefix}plan", parent=sub_menu_handle, callback=self.processFeedback)
 
         # Create a 6-DOF marker using MOVE_ROTATE_3D with additional axis controls, combined with a menu.
         self.make6DofMarker(False, InteractiveMarkerControl.MOVE_ROTATE_3D, Point(x=0.0, y=0.0, z=0.0), show_6dof=True)
 
         # Apply all changes
         self.server.applyChanges()
+
+    def timer_callback(self):
+        command_msg = Command()
+        command_msg.command_type = self.controllers
+        command_msg.acceleration.data = [0.0]*self.total_no_efforts
+        command_msg.twist.data = [0.0]*self.total_no_efforts
+        command_msg.pose.data = [0.0]*self.total_no_efforts
+
+        # x, y, z, r, p, y ,q0, q1, q2, q3, q4, x, y, z, r, p, y ,q0, q1, q2, q3, q4
+        # first part for robot1 and second part for subsequent robot
+            
+        # Publish the command
+        # self.get_logger().info(f'{command_msg.pose.data}')
+        self.uvms_publisher_.publish(command_msg)
 
 
     def processFeedback(self, feedback):
