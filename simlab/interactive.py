@@ -1,18 +1,31 @@
 #!/usr/bin/env python3
 import copy
+import math
 import rclpy
+import numpy as np
 from rclpy.node import Node
+from scipy.spatial.transform import Rotation as R
 
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, Pose
 from visualization_msgs.msg import Marker, InteractiveMarker, InteractiveMarkerControl, InteractiveMarkerFeedback
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer
 from interactive_markers.menu_handler import MenuHandler
 from rclpy.qos import QoSProfile, QoSHistoryPolicy
 from uvms_interfaces.msg import Command
+from robot import Robot
+
+def quaternion_to_euler(orientation):
+    # Convert geometry_msgs Quaternion to Euler angles (roll, pitch, yaw) using SciPy.
+    # Note: geometry_msgs Quaternion ordering is [x, y, z, w].
+    quat = [orientation.x, orientation.y, orientation.z, orientation.w]
+    r = R.from_quat(quat)
+    roll, pitch, yaw = r.as_euler('xyz', degrees=False)
+    return roll, pitch, yaw
 
 class BasicControlsNode(Node):
     def __init__(self):
-        super().__init__('uvms_interactive_controls', automatically_declare_parameters_from_overrides=True)
+        super().__init__('uvms_interactive_controls',
+                         automatically_declare_parameters_from_overrides=True)
 
         # Get parameter values
         self.no_robot = self.get_parameter('no_robot').value
@@ -21,84 +34,143 @@ class BasicControlsNode(Node):
         self.record = self.get_parameter('record_data').value
         self.controllers = self.get_parameter('controllers').value
         self.get_logger().info(f"robots controllers : {self.controllers}")
-
         self.get_logger().info(f"robot prefixes found in task node: {self.robots_prefix}")
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"robots total number of commands : {self.total_no_efforts}")
 
-        qos_profile = QoSProfile(
-                    history=QoSHistoryPolicy.KEEP_LAST,
-                    depth=10
-                )
-
+        qos_profile = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10)
         self.uvms_publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', qos_profile)
 
         frequency = 150  # Hz
         self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
         self.get_logger().info("CoverageTask node has been initialized with optimal control.")
 
-        # Create the interactive marker server and menu handler
+        initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
+        self.robots = [Robot(self, k, 4, prefix, initial_pos, self.record)
+                       for k, prefix in enumerate(self.robots_prefix)]
+        
+        # Internal attributes for planning.
+        self.last_marker_pose = None      # Last stored marker pose (in NWU)
+        self.selected_robot_index = None  # Which robot is being targeted
+        self.execute_plan = False         # Flag to trigger planning command
+
+        # Create the interactive marker server and menu handler.
         self.server = InteractiveMarkerServer(self, "uvms_interactive_controls")
         self.menu_handler = MenuHandler()
 
-        # Set up the menu entries
+        # Set up the menu entries:
+        # Menu entry ID 1: "execute" command.
         self.menu_handler.insert("execute", callback=self.processFeedback)
         sub_menu_handle = self.menu_handler.insert("Robots")
+        # For each robot, add a plan option. (Assuming these get IDs starting at 3.)
         for prefix in self.robots_prefix:
-            self.menu_handler.insert(f"{prefix}plan", parent=sub_menu_handle, callback=self.processFeedback)
+            self.menu_handler.insert(f"{prefix} plan", parent=sub_menu_handle, callback=self.processFeedback)
 
-        # Create a 6-DOF marker using MOVE_ROTATE_3D with additional axis controls, combined with a menu.
-        self.make6DofMarker(False, InteractiveMarkerControl.MOVE_ROTATE_3D, Point(x=0.0, y=0.0, z=0.0), show_6dof=True)
-
-        # Apply all changes
+        # Create a 6-DOF marker with all original controls.
+        self.make6DofMarker(False, InteractiveMarkerControl.MOVE_ROTATE_3D,
+                             Point(x=0.0, y=0.0, z=0.0), show_6dof=True)
         self.server.applyChanges()
 
     def timer_callback(self):
         command_msg = Command()
         command_msg.command_type = self.controllers
-        command_msg.acceleration.data = [0.0]*self.total_no_efforts
-        command_msg.twist.data = [0.0]*self.total_no_efforts
-        command_msg.pose.data = [0.0]*self.total_no_efforts
+        command_msg.acceleration.data = []
+        command_msg.twist.data = []
+        command_msg.pose.data = []
 
-        # x, y, z, r, p, y ,q0, q1, q2, q3, q4, x, y, z, r, p, y ,q0, q1, q2, q3, q4
-        # first part for robot1 and second part for subsequent robot
-            
-        # Publish the command
-        # self.get_logger().info(f'{command_msg.pose.data}')
+        for k, robot in enumerate(self.robots):
+            state = robot.get_state()
+            if state['status'] == 'active':
+                command_msg.acceleration.data.extend([0.0]*self.no_efforts)
+                command_msg.twist.data.extend([0.0]*self.no_efforts)
+                robot.publish_robot_path()
+                # If executing plan for the selected robot.
+                if self.execute_plan and (k == self.selected_robot_index) and (self.last_marker_pose is not None):
+                    planned = self.last_marker_pose
+                    # Extract NWU pose values from the planned marker pose.
+                    x_nwu = planned.position.x
+                    y_nwu = planned.position.y
+                    z_nwu = planned.position.z
+                    roll_nwu, pitch_nwu, yaw_nwu = quaternion_to_euler(planned.orientation)
+
+                    # Convert position from NWU to NED.
+                    x_ned = x_nwu
+                    y_ned = -y_nwu
+                    z_ned = -z_nwu
+
+                    # Convert orientation from NWU to NED:
+                    # Apply conversion (here we simply invert pitch and yaw for NED).
+                    roll_ned = roll_nwu
+                    pitch_ned = -pitch_nwu
+                    yaw_ned = -yaw_nwu
+
+                    # Log the converted values.
+                    self.get_logger().debug(
+                        f"Executing plan for robot {self.robots_prefix[k]}: "
+                        f"NWU pose: ({x_nwu:.2f}, {y_nwu:.2f}, {z_nwu:.2f}, {roll_nwu:.2f}, {pitch_nwu:.2f}, {yaw_nwu:.2f}) | "
+                        f"NED pose: ({x_ned:.2f}, {y_ned:.2f}, {z_ned:.2f}, {roll_ned:.2f}, {pitch_ned:.2f}, {yaw_ned:.2f})"
+                    )
+
+                    q0, q1, q2, q3 = state['q']
+                    # Use the NED values in the command message.
+                    command_msg.pose.data.extend([x_ned, y_ned, z_ned, roll_ned, pitch_ned, yaw_ned, q0, q1, q2, q3, 0.0])
+
+                    # For error check, compare current NWU state with the planned NWU target.
+                    current_pos = np.array(state['pose'][:3])
+                    target_pos = np.array([x_nwu, y_nwu, z_nwu])
+                    error = np.linalg.norm(current_pos - target_pos)
+                    if error < 0.1:  # threshold in meters
+                        self.get_logger().info("Target reached; resetting execution flag.")
+                        self.execute_plan = False
+                else:
+                    [x, y, z, r, p, y_angle] = state['pose']
+                    q0, q1, q2, q3 = state['q']
+                    command_msg.pose.data.extend([x, y, z, r, p, y_angle, q0, q1, q2, q3, 0.0])
         self.uvms_publisher_.publish(command_msg)
 
-
     def processFeedback(self, feedback):
-        s = "Feedback from marker '" + feedback.marker_name + "' / control '" + feedback.control_name + "'"
+        s = f"Feedback from marker '{feedback.marker_name}' / control '{feedback.control_name}'"
         mp = ""
         if feedback.mouse_point_valid:
-            mp = (" at " + str(feedback.mouse_point.x) + ", " +
-                str(feedback.mouse_point.y) + ", " +
-                str(feedback.mouse_point.z) +
-                " in frame " + feedback.header.frame_id)
+            mp = f" at {feedback.mouse_point.x}, {feedback.mouse_point.y}, {feedback.mouse_point.z} in frame {feedback.header.frame_id}"
         if feedback.event_type == InteractiveMarkerFeedback.BUTTON_CLICK:
-            self.get_logger().info(s + ": button click" + mp + ".")
+            self.get_logger().debug(s + ": button click" + mp + ".")
         elif feedback.event_type == InteractiveMarkerFeedback.MENU_SELECT:
-            self.get_logger().info(s + ": menu item " + str(feedback.menu_entry_id) + " clicked" + mp + ".")
+            self.get_logger().debug(s + f": menu item {feedback.menu_entry_id} clicked" + mp + ".")
+            if feedback.menu_entry_id == 1:
+                # For execute, update the planned pose if available.
+                if feedback.pose:
+                    self.last_marker_pose = feedback.pose
+                if self.selected_robot_index is not None and self.last_marker_pose is not None:
+                    self.execute_plan = True
+                    self.get_logger().info(
+                        f"Execute clicked: plan will be applied to robot {self.robots_prefix[self.selected_robot_index]}."
+                    )
+                else:
+                    self.get_logger().warn("Execute clicked but no robot was selected or no planned pose available.")
+            else:
+                # Assume menu entry IDs for robot selection start at 3.
+                robot_index = feedback.menu_entry_id - 3
+                if 0 <= robot_index < len(self.robots_prefix):
+                    self.selected_robot_index = robot_index
+                    self.get_logger().info(f"Robot {self.robots_prefix[robot_index]} selected for planning.")
+                else:
+                    self.get_logger().warn("Invalid robot selection from menu.")
         elif feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
-            # Check if the marker's center (pose) is moving above z=0
             if feedback.pose.position.z > 0.0:
-                self.get_logger().info(
-                    s + ": pose changed with z above 0 (" +
-                    str(feedback.pose.position.z) + "); clamping to 0."
+                self.get_logger().debug(
+                    s + f": pose changed with z above 0 ({feedback.pose.position.z}); clamping to 0."
                 )
-                # Clamp the z coordinate to zero
                 feedback.pose.position.z = 0.0
-                # Update the marker's pose on the server
                 self.server.setPose(feedback.marker_name, feedback.pose)
             else:
-                self.get_logger().info(s + ": pose changed")
+                self.get_logger().debug(s + ": pose changed")
+            self.last_marker_pose = feedback.pose
         elif feedback.event_type == InteractiveMarkerFeedback.MOUSE_DOWN:
-            self.get_logger().info(s + ": mouse down" + mp + ".")
+            self.get_logger().debug(s + ": mouse down" + mp + ".")
         elif feedback.event_type == InteractiveMarkerFeedback.MOUSE_UP:
-            self.get_logger().info(s + ": mouse up" + mp + ".")
+            self.get_logger().debug(s + ": mouse up" + mp + ".")
         self.server.applyChanges()
-
 
     def makeBox(self, msg):
         marker = Marker()
@@ -131,16 +203,16 @@ class BasicControlsNode(Node):
 
         if show_6dof:
             # Add additional axis controls (rotation and translation along X, Y, and Z)
-            control = InteractiveMarkerControl()
-            control.orientation.w = 1.0
-            control.orientation.x = 1.0
-            control.orientation.y = 0.0
-            control.orientation.z = 0.0
-            control.name = "rotate_x"
-            control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-            if fixed:
-                control.orientation_mode = InteractiveMarkerControl.FIXED
-            int_marker.controls.append(control)
+            # control = InteractiveMarkerControl()
+            # control.orientation.w = 1.0
+            # control.orientation.x = 1.0
+            # control.orientation.y = 0.0
+            # control.orientation.z = 0.0
+            # control.name = "rotate_x"
+            # control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
+            # if fixed:
+            #     control.orientation_mode = InteractiveMarkerControl.FIXED
+            # int_marker.controls.append(control)
 
             control = InteractiveMarkerControl()
             control.orientation.w = 1.0
@@ -175,16 +247,16 @@ class BasicControlsNode(Node):
                 control.orientation_mode = InteractiveMarkerControl.FIXED
             int_marker.controls.append(control)
 
-            control = InteractiveMarkerControl()
-            control.orientation.w = 1.0
-            control.orientation.x = 0.0
-            control.orientation.y = 0.0
-            control.orientation.z = 1.0
-            control.name = "rotate_y"
-            control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-            if fixed:
-                control.orientation_mode = InteractiveMarkerControl.FIXED
-            int_marker.controls.append(control)
+            # control = InteractiveMarkerControl()
+            # control.orientation.w = 1.0
+            # control.orientation.x = 0.0
+            # control.orientation.y = 0.0
+            # control.orientation.z = 1.0
+            # control.name = "rotate_y"
+            # control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
+            # if fixed:
+            #     control.orientation_mode = InteractiveMarkerControl.FIXED
+            # int_marker.controls.append(control)
 
             control = InteractiveMarkerControl()
             control.orientation.w = 1.0
@@ -197,7 +269,7 @@ class BasicControlsNode(Node):
                 control.orientation_mode = InteractiveMarkerControl.FIXED
             int_marker.controls.append(control)
 
-        # Add a menu control to the same marker
+        # Add a menu control to the marker.
         menu_control = InteractiveMarkerControl()
         menu_control.interaction_mode = InteractiveMarkerControl.MENU
         menu_control.name = "robots_control_menu"
