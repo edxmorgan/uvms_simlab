@@ -13,6 +13,11 @@ from interactive_markers.menu_handler import MenuHandler
 from rclpy.qos import QoSProfile, QoSHistoryPolicy
 from uvms_interfaces.msg import Command
 from robot import Robot
+import tf2_ros
+import tf2_geometry_msgs
+from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import TransformStamped
+
 
 def quaternion_to_euler(orientation):
     # Convert geometry_msgs Quaternion to Euler angles (roll, pitch, yaw) using SciPy.
@@ -30,6 +35,8 @@ class BasicControlsNode(Node):
     def __init__(self):
         super().__init__('uvms_interactive_controls',
                          automatically_declare_parameters_from_overrides=True)
+        
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
         # Get parameter values
         self.no_robot = self.get_parameter('no_robot').value
@@ -45,18 +52,48 @@ class BasicControlsNode(Node):
         qos_profile = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10)
         self.uvms_publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', qos_profile)
 
-        frequency = 150  # Hz
+        frequency = 500  # Hz
         self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
         self.get_logger().info("CoverageTask node has been initialized with optimal control.")
 
         initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
         self.robots = [Robot(self, k, 4, prefix, initial_pos, self.record)
                        for k, prefix in enumerate(self.robots_prefix)]
-        
+
+        # Define your task-space boundaries as a class attribute or constant.
+        self.TASK_SPACE_BOX = {
+            'x_min': 0.0, 'x_max': 0.4,
+            'y_min': -0.4, 'y_max': 0.4,
+            'z_min': -0.4,  'z_max': 0.4
+        }
+
         # Internal attributes for planning.
-        self.last_marker_pose = None      # Last stored marker pose (in NWU)
+        # In your __init__ method:
+        self.last_marker_pose = Pose()
+        self.last_marker_pose.position.x = 0.0
+        self.last_marker_pose.position.y = 0.0
+        self.last_marker_pose.position.z = 0.0
+        self.last_marker_pose.orientation.x = 0.0
+        self.last_marker_pose.orientation.y = 0.0
+        self.last_marker_pose.orientation.z = 0.0
+        self.last_marker_pose.orientation.w = 1.0
+
         self.selected_robot_index = None  # Which robot is being targeted
         self.execute_plan = False         # Flag to trigger planning command
+
+        # Create a new pose for the small box transform.
+        self.arm_base_pose = Pose()
+        self.arm_base_pose.position.x = 0.19
+        self.arm_base_pose.position.y = 0.0
+        self.arm_base_pose.position.z = -0.12
+
+        # Convert the given Euler angles to a quaternion.
+        r = R.from_euler('xyz', [3.142, 0.0, 0.0])
+        q = r.as_quat()  # returns [x, y, z, w]
+        self.arm_base_pose.orientation.x = q[0]
+        self.arm_base_pose.orientation.y = q[1]
+        self.arm_base_pose.orientation.z = q[2]
+        self.arm_base_pose.orientation.w = q[3]
 
         # Create the interactive marker server and menu handler.
         self.server = InteractiveMarkerServer(self, "uvms_interactive_controls")
@@ -70,12 +107,27 @@ class BasicControlsNode(Node):
         for prefix in self.robots_prefix:
             self.menu_handler.insert(f"{prefix} plan", parent=sub_menu_handle, callback=self.processFeedback)
 
-        # Create a 6-DOF marker with all original controls.
-        self.make6DofMarker(False, InteractiveMarkerControl.MOVE_ROTATE_3D,
-                             Point(x=0.0, y=0.0, z=0.0), show_6dof=True)
+        self.base_frame = "base_link"
+        self.marker_frame = "marker_frame"
+        self.arm_base_frame = "arm_frame"
+
+        # Create a 6-DOF markers with controls.
+        self.make6DofMarker('vehicle marker', 'interactive marker for controlling vehicle', self.base_frame, 'vehicle', 
+                            False, InteractiveMarkerControl.MOVE_ROTATE_3D,
+                             self.last_marker_pose.position, self.processFeedback, show_6dof=True)
+
+        self.make6DofMarker('endeffector marker', 'interactive marker for controlling endeffector', self.arm_base_frame, 'endeffector', 
+                            False, InteractiveMarkerControl.MOVE_ROTATE_3D,
+                             Point(x=0.126, y=-0.007, z=0.088), self.processConstrainedFeedback, 
+                             show_6dof=True, marker_type = Marker.SPHERE, marker_scale = 0.2)
+        
         self.server.applyChanges()
 
+ 
+
     def timer_callback(self):
+        self.broadcast_pose(self.last_marker_pose, self.base_frame, self.marker_frame)
+        self.broadcast_pose(self.arm_base_pose, self.marker_frame, self.arm_base_frame)
         command_msg = Command()
         command_msg.command_type = self.controllers
         command_msg.acceleration.data = []
@@ -190,9 +242,34 @@ class BasicControlsNode(Node):
             self.get_logger().debug(s + ": mouse up" + mp + ".")
         self.server.applyChanges()
 
-    def makeBox(self, msg):
+    def processConstrainedFeedback(self, feedback):
+        """
+        Feedback callback for the constrained marker.
+        It clamps the position so that it remains within TASK_SPACE_BOX.
+        """
+        s = f"Constrained marker feedback from '{feedback.marker_name}'"
+        if feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
+            new_pose = feedback.pose
+
+            # Clamp the position within task space bounds.
+            new_pose.position.x = max(self.TASK_SPACE_BOX['x_min'],
+                                        min(new_pose.position.x, self.TASK_SPACE_BOX['x_max']))
+            new_pose.position.y = max(self.TASK_SPACE_BOX['y_min'],
+                                        min(new_pose.position.y, self.TASK_SPACE_BOX['y_max']))
+            new_pose.position.z = max(self.TASK_SPACE_BOX['z_min'],
+                                        min(new_pose.position.z, self.TASK_SPACE_BOX['z_max']))
+
+            self.get_logger().debug(
+                f"{s}: Clamped position to ({new_pose.position.x:.3f}, {new_pose.position.y:.3f}, {new_pose.position.z:.3f})"
+            )
+            # Update the pose on the server.
+            self.server.setPose(feedback.marker_name, new_pose)
+        # You can add additional processing for BUTTON_CLICK, MENU_SELECT, etc.
+        self.server.applyChanges()
+
+    def makeBox(self, msg, marker_type):
         marker = Marker()
-        marker.type = Marker.CUBE
+        marker.type = marker_type
         marker.scale.x = msg.scale * 0.25
         marker.scale.y = msg.scale * 0.25
         marker.scale.z = msg.scale * 0.25
@@ -202,36 +279,59 @@ class BasicControlsNode(Node):
         marker.color.a = 1.0
         return marker
 
-    def makeBoxControl(self, msg):
+    def makeBoxControl(self, msg, marker_type):
         control = InteractiveMarkerControl()
         control.always_visible = True
-        control.markers.append(self.makeBox(msg))
+        control.markers.append(self.makeBox(msg, marker_type))
         msg.controls.append(control)
         return control
 
-    def make6DofMarker(self, fixed, interaction_mode, position, show_6dof=False):
+    def make6DofMarker(self, name, description, frame_id, robot_joint, fixed, interaction_mode, position, callback, 
+                       show_6dof=False, marker_type = Marker.CUBE, marker_scale = 1.0):
         int_marker = InteractiveMarker()
-        int_marker.header.frame_id = "base_link"
+        int_marker.header.frame_id = frame_id
         int_marker.pose.position = position
-        int_marker.scale = 1.0
-        int_marker.name = "interactive controller"
-        int_marker.description = "Whole-body Interactive Controller"
-        self.makeBoxControl(int_marker)
+        int_marker.scale = marker_scale
+        int_marker.name = name
+        int_marker.description = description
+        self.makeBoxControl(int_marker, marker_type)
         int_marker.controls[0].interaction_mode = interaction_mode
 
+        if robot_joint == 'vehicle':
+            # Create a new fixed control for the small box.
+            small_box_control = InteractiveMarkerControl()
+            small_box_control.always_visible = True
+
+            # Create the small box marker (adjust scale and color as needed).
+            small_box_marker = Marker()
+            small_box_marker.type = Marker.CUBE
+            small_box_marker.scale.x = 0.05  # a smaller cube
+            small_box_marker.scale.y = 0.05
+            small_box_marker.scale.z = 0.05
+            small_box_marker.color.r = 1.0  # for example, red
+            small_box_marker.color.g = 0.0
+            small_box_marker.color.b = 0.0
+            small_box_marker.color.a = 1.0
+
+            small_box_marker.pose = self.arm_base_pose
+            # Append the marker to the control.
+            small_box_control.markers.append(small_box_marker)
+
+            # Add this fixed control to your interactive marker.
+            int_marker.controls.append(small_box_control)
+
         if show_6dof:
-            # Add additional axis controls (rotation and translation along X, Y, and Z)
-            # Uncomment any controls you wish to include.
-            # control = InteractiveMarkerControl()
-            # control.orientation.w = 1.0
-            # control.orientation.x = 1.0
-            # control.orientation.y = 0.0
-            # control.orientation.z = 0.0
-            # control.name = "rotate_x"
-            # control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-            # if fixed:
-            #     control.orientation_mode = InteractiveMarkerControl.FIXED
-            # int_marker.controls.append(control)
+            if robot_joint == 'endeffector':
+                control = InteractiveMarkerControl()
+                control.orientation.w = 1.0
+                control.orientation.x = 1.0
+                control.orientation.y = 0.0
+                control.orientation.z = 0.0
+                control.name = "rotate_x"
+                control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
+                if fixed:
+                    control.orientation_mode = InteractiveMarkerControl.FIXED
+                int_marker.controls.append(control)
 
             control = InteractiveMarkerControl()
             control.orientation.w = 1.0
@@ -266,16 +366,17 @@ class BasicControlsNode(Node):
                 control.orientation_mode = InteractiveMarkerControl.FIXED
             int_marker.controls.append(control)
 
-            # control = InteractiveMarkerControl()
-            # control.orientation.w = 1.0
-            # control.orientation.x = 0.0
-            # control.orientation.y = 0.0
-            # control.orientation.z = 1.0
-            # control.name = "rotate_y"
-            # control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-            # if fixed:
-            #     control.orientation_mode = InteractiveMarkerControl.FIXED
-            # int_marker.controls.append(control)
+            if robot_joint == 'endeffector':
+                control = InteractiveMarkerControl()
+                control.orientation.w = 1.0
+                control.orientation.x = 0.0
+                control.orientation.y = 0.0
+                control.orientation.z = 1.0
+                control.name = "rotate_y"
+                control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
+                if fixed:
+                    control.orientation_mode = InteractiveMarkerControl.FIXED
+                int_marker.controls.append(control)
 
             control = InteractiveMarkerControl()
             control.orientation.w = 1.0
@@ -297,8 +398,31 @@ class BasicControlsNode(Node):
         int_marker.controls.append(copy.deepcopy(menu_control))
 
         self.server.insert(int_marker)
-        self.server.setCallback(int_marker.name, self.processFeedback)
+        self.server.setCallback(int_marker.name, callback)
         self.menu_handler.apply(self.server, int_marker.name)
+
+    def broadcast_pose(self, pose, parent_frame, child_frame):
+        """
+        Broadcasts the given pose as a transform from parent_frame to child_frame.
+        """
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = parent_frame
+        t.child_frame_id = child_frame
+
+        # Set translation from the pose position.
+        t.transform.translation.x = pose.position.x
+        t.transform.translation.y = pose.position.y
+        t.transform.translation.z = pose.position.z
+
+        # Set rotation from the pose orientation.
+        t.transform.rotation = pose.orientation
+
+        self.tf_broadcaster.sendTransform(t)
+        self.get_logger().debug(
+            f"Broadcasting transform from {parent_frame} to {child_frame}: "
+            f"translation=({pose.position.x:.2f}, {pose.position.y:.2f}, {pose.position.z:.2f})"
+        )
 
 def main(args=None):
     rclpy.init(args=args)
