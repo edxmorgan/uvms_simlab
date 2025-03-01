@@ -38,7 +38,7 @@ setup(
             'joystick_controller = simlab.joystick_control:main',
             'coverage_node = simlab.dive_coverage:main',
             'pwm_test_node = simlab.pwm_test:main',
-            'interactive_marker_node = simlab.interactive:main',
+            'interactive_marker_node = simlab.interactive_marker_control:main',
         ],
     },
 )
