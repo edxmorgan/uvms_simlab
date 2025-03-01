@@ -122,20 +122,21 @@ class BasicControlsNode(Node):
                     target_pitch = curr_pitch + delta_pitch
                     target_yaw = curr_yaw + delta_yaw
 
-                    self.get_logger().debug(
-                        f"Executing plan for robot {self.robots_prefix[k]}: NWU pose: "
-                        f"({x_nwu:.2f}, {y_nwu:.2f}, {z_nwu:.2f}, {roll_nwu:.2f}, {pitch_nwu:.2f}, {yaw_nwu:.2f}) | "
-                        f"Raw NED: ({x_ned:.2f}, {y_ned:.2f}, {z_ned:.2f}, {raw_roll_ned:.2f}, {raw_pitch_ned:.2f}, {raw_yaw_ned:.2f}) | "
-                        f"Target NED: ({x_ned:.2f}, {y_ned:.2f}, {z_ned:.2f}, {target_roll:.2f}, {target_pitch:.2f}, {target_yaw:.2f})"
-                    )
+                    # self.get_logger().debug(
+                    #     f"Executing plan for robot {self.robots_prefix[k]}: NWU pose: "
+                    #     f"({x_nwu:.2f}, {y_nwu:.2f}, {z_nwu:.2f}, {roll_nwu:.2f}, {pitch_nwu:.2f}, {yaw_nwu:.2f}) | "
+                    #     f"Raw NED: ({x_ned:.2f}, {y_ned:.2f}, {z_ned:.2f}, {raw_roll_ned:.2f}, {raw_pitch_ned:.2f}, {raw_yaw_ned:.2f}) | "
+                    #     f"Target NED: ({x_ned:.2f}, {y_ned:.2f}, {z_ned:.2f}, {target_roll:.2f}, {target_pitch:.2f}, {target_yaw:.2f})"
+                    # )
 
                     q0, q1, q2, q3 = state['q']
                     command_msg.pose.data.extend([x_ned, y_ned, z_ned, target_roll, target_pitch, target_yaw, q0, q1, q2, q3, 0.0])
 
                     # For error check, compare current NWU state with the planned NWU target.
-                    current_pos = np.array(state['pose'][:3])
-                    target_pos = np.array([x_nwu, y_nwu, z_nwu])
+                    current_pos = np.array(state['pose'])
+                    target_pos = np.array([x_ned, y_ned, z_ned, target_roll, target_pitch, target_yaw])
                     error = np.linalg.norm(current_pos - target_pos)
+                    self.get_logger().debug(f"Target error: {error}")
                     if error < 0.1:  # threshold in meters
                         self.get_logger().info("Target reached; resetting execution flag.")
                         self.execute_plan = False
