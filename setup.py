@@ -12,6 +12,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name, ['resource/diff_iK.casadi']),
         ('share/' + package_name, ['resource/fk_eval.casadi']),
+        ('share/' + package_name, ['resource/workspace.npy']),
         (
             'share/' + package_name + '/manipulator',
             glob('resource/manipulator/*')

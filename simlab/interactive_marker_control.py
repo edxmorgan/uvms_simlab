@@ -8,7 +8,7 @@ import rclpy
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation as R
 
-from geometry_msgs.msg import Point, Pose
+from geometry_msgs.msg import Pose
 from visualization_msgs.msg import Marker, InteractiveMarker, InteractiveMarkerControl, InteractiveMarkerFeedback
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer
 from interactive_markers.menu_handler import MenuHandler
@@ -18,7 +18,12 @@ from robot import Robot
 import tf2_ros
 from tf_transformations import quaternion_multiply, quaternion_from_euler
 from geometry_msgs.msg import TransformStamped
-
+import ament_index_python
+import os
+from sensor_msgs.msg import PointCloud2
+from std_msgs.msg import Header
+import sensor_msgs_py.point_cloud2 as pc2
+from scipy.spatial import ConvexHull
 
 def quaternion_to_euler(orientation):
     # Convert geometry_msgs Quaternion to Euler angles (roll, pitch, yaw) using SciPy.
@@ -53,6 +58,18 @@ class BasicControlsNode(Node):
         qos_profile = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10)
         self.uvms_publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', qos_profile)
 
+        self.pc_publisher_ = self.create_publisher(PointCloud2, 'workspace_pointcloud', 10)
+        package_share_directory = ament_index_python.get_package_share_directory(
+                        'simlab')
+        workspace_pts_path = os.path.join(package_share_directory, 'workspace.npy')
+        self.workspace_pts = np.load(workspace_pts_path)
+        # Convert positions to a list of [x, y, z] points
+        self.workspace_pts_list = self.workspace_pts.tolist()
+        # Precompute convex hull from your workspace points (positions_fb: (N x 3) array)
+        self.hull = ConvexHull(self.workspace_pts)
+
+        self.get_logger().info("Loaded workspace positions.")
+
         frequency = 500  # Hz
         self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
         self.get_logger().info("CoverageTask node has been initialized with optimal control.")
@@ -60,13 +77,6 @@ class BasicControlsNode(Node):
         initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
         self.robots = [Robot(self, k, 4, prefix, initial_pos, self.record)
                        for k, prefix in enumerate(self.robots_prefix)]
-
-        # Define your task-space boundaries as a class attribute or constant.
-        self.TASK_SPACE_BOX = {
-            'x_min': 0.0, 'x_max': 0.4,
-            'y_min': -0.4, 'y_max': 0.4,
-            'z_min': -0.4,  'z_max': 0.4
-        }
 
         # Internal attributes for planning.
         # In your __init__ method:
@@ -110,26 +120,55 @@ class BasicControlsNode(Node):
 
         self.base_frame = "base_link"
         self.marker_frame = "marker_frame"
-        self.arm_base_frame = "arm_frame"
 
-        # Create a 10-DOF uvms marker with controls.
-        self.make_UVMS_Dof_Marker(name = 'uvms marker', 
+        # Create a interactive vehicle marker with controls.
+        self.uv_marker = self.make_UVMS_Dof_Marker(name = 'uv_marker', 
                             description = 'interactive marker for controlling vehicle', 
                             frame_id = self.base_frame, 
-                            robot = 'uvms', 
+                            robot = 'uv', 
                             fixed = False, 
                             interaction_mode = InteractiveMarkerControl.MOVE_ROTATE_3D,
-                            initial_position = self.last_marker_pose.position, 
-                            callback = self.processFeedback, 
-                            show_6dof=True)
-
-
+                            initial_position = self.last_marker_pose.position,
+                            scale=1.0,
+                            show_6dof=True,
+                            ignore_dof=['roll','pitch'])
+        self.server.insert(self.uv_marker)
+        self.server.setCallback(self.uv_marker.name, self.processFeedback)
         
+        # Create interactive endeffector marker with controls
+        initial_task_pose = self.compute_end_effector_pose(self.arm_base_pose)
+        self.last_valid_task_pose = initial_task_pose  # Store the last known valid endeffector pose
+        self.task_marker = self.make_UVMS_Dof_Marker(name = 'task_marker', 
+                            description = 'interactive marker for controlling endeffector', 
+                            frame_id = self.marker_frame, 
+                            robot = 'task', 
+                            fixed = False, 
+                            interaction_mode = InteractiveMarkerControl.MOVE_ROTATE_3D,
+                            initial_position = initial_task_pose.position,
+                            scale=0.2,
+                            show_6dof=True,
+                            ignore_dof=['yaw'])
+        self.server.insert(self.task_marker)
+        self.server.setCallback(self.task_marker.name, self.processFeedback)
+
+        menu_control = self.make_menu_control()
+        self.uv_marker.controls.append(copy.deepcopy(menu_control))
+        self.menu_handler.apply(self.server, self.uv_marker.name)
+
         self.server.applyChanges()
 
- 
+        self.header = Header()
+        self.header.frame_id = self.marker_frame
+
 
     def timer_callback(self):
+        # Create the PointCloud2 message
+        self.header.stamp = self.get_clock().now().to_msg()
+        cloud_msg = pc2.create_cloud_xyz32(self.header, self.workspace_pts_list)
+        self.pc_publisher_.publish(cloud_msg)
+        self.get_logger().debug("Published workspace point cloud.")
+
+
         self.broadcast_pose(self.last_marker_pose, self.base_frame, self.marker_frame)
         command_msg = Command()
         command_msg.command_type = self.controllers
@@ -202,74 +241,50 @@ class BasicControlsNode(Node):
         self.uvms_publisher_.publish(command_msg)
 
     def processFeedback(self, feedback):
-        s = f"Feedback from marker '{feedback.marker_name}' / control '{feedback.control_name}'"
-        mp = ""
-        if feedback.mouse_point_valid:
-            mp = f" at {feedback.mouse_point.x}, {feedback.mouse_point.y}, {feedback.mouse_point.z} in frame {feedback.header.frame_id}"
-        if feedback.event_type == InteractiveMarkerFeedback.BUTTON_CLICK:
-            self.get_logger().debug(s + ": button click" + mp + ".")
-        elif feedback.event_type == InteractiveMarkerFeedback.MENU_SELECT:
-            self.get_logger().debug(s + f": menu item {feedback.menu_entry_id} clicked" + mp + ".")
-            if feedback.menu_entry_id == 1:
-                # For execute, update the planned pose if available.
-                if feedback.pose:
-                    self.last_marker_pose = feedback.pose
-                if self.selected_robot_index is not None and self.last_marker_pose is not None:
-                    self.execute_plan = True
-                    self.get_logger().info(
-                        f"Execute clicked: plan will be applied to robot {self.robots_prefix[self.selected_robot_index]}."
-                    )
+        self.get_logger().debug(
+            f"{feedback.marker_name}."
+        )
+        if feedback.marker_name == "uv_marker":
+            if feedback.pose:
+                self.last_marker_pose = feedback.pose
+                if feedback.pose.position.z > 0.0:
+                    feedback.pose.position.z = 0.0
+                    self.server.setPose(feedback.marker_name, feedback.pose)
+                    self.server.applyChanges()
+            if feedback.event_type == InteractiveMarkerFeedback.MENU_SELECT:
+                if feedback.menu_entry_id == 1:
+                    # For execute, update the planned pose if available.
+                    if self.selected_robot_index is not None and self.last_marker_pose is not None:
+                        self.execute_plan = True
+                        self.get_logger().info(
+                            f"Execute clicked: plan will be applied to robot {self.robots_prefix[self.selected_robot_index]}."
+                        )
+                    else:
+                        self.get_logger().warn("Execute clicked but no robot was selected or no planned pose available.")
                 else:
-                    self.get_logger().warn("Execute clicked but no robot was selected or no planned pose available.")
+                    # Assume menu entry IDs for robot selection start at 3.
+                    robot_index = feedback.menu_entry_id - 3
+                    if 0 <= robot_index < len(self.robots_prefix):
+                        self.selected_robot_index = robot_index
+                        self.get_logger().info(f"Robot {self.robots_prefix[robot_index]} selected for planning.")
+                    else:
+                        self.get_logger().warn("Invalid robot selection from menu.")
+            elif feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
+                pass
+            
+        if feedback.marker_name == "task_marker":
+            task_point = np.array([feedback.pose.position.x, feedback.pose.position.y, feedback.pose.position.z])  # Example target position
+            # Check if the new task point is within the convex workspace
+            if self.is_point_in_convex_workspace(task_point, self.hull).item():
+                self.get_logger().debug("Task is within the workspace.")
+                # Update the last valid pose since this is in workspace
+                self.last_valid_task_pose = feedback.pose
             else:
-                # Assume menu entry IDs for robot selection start at 3.
-                robot_index = feedback.menu_entry_id - 3
-                if 0 <= robot_index < len(self.robots_prefix):
-                    self.selected_robot_index = robot_index
-                    self.get_logger().info(f"Robot {self.robots_prefix[robot_index]} selected for planning.")
-                else:
-                    self.get_logger().warn("Invalid robot selection from menu.")
-        elif feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
-            if feedback.pose.position.z > 0.0:
-                self.get_logger().debug(
-                    s + f": pose changed with z above 0 ({feedback.pose.position.z}); clamping to 0."
-                )
-                feedback.pose.position.z = 0.0
-                self.server.setPose(feedback.marker_name, feedback.pose)
-            else:
-                self.get_logger().debug(s + ": pose changed")
-            self.last_marker_pose = feedback.pose
-        elif feedback.event_type == InteractiveMarkerFeedback.MOUSE_DOWN:
-            self.get_logger().debug(s + ": mouse down" + mp + ".")
-        elif feedback.event_type == InteractiveMarkerFeedback.MOUSE_UP:
-            self.get_logger().debug(s + ": mouse up" + mp + ".")
-        self.server.applyChanges()
-
-    # def processConstrainedFeedback(self, feedback):
-    #     """
-    #     Feedback callback for the constrained marker.
-    #     It clamps the position so that it remains within TASK_SPACE_BOX.
-    #     """
-    #     s = f"Constrained marker feedback from '{feedback.marker_name}'"
-    #     if feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
-    #         new_pose = feedback.pose
-
-    #         # Clamp the position within task space bounds.
-    #         new_pose.position.x = max(self.TASK_SPACE_BOX['x_min'],
-    #                                     min(new_pose.position.x, self.TASK_SPACE_BOX['x_max']))
-    #         new_pose.position.y = max(self.TASK_SPACE_BOX['y_min'],
-    #                                     min(new_pose.position.y, self.TASK_SPACE_BOX['y_max']))
-    #         new_pose.position.z = max(self.TASK_SPACE_BOX['z_min'],
-    #                                     min(new_pose.position.z, self.TASK_SPACE_BOX['z_max']))
-
-    #         self.get_logger().debug(
-    #             f"{s}: Clamped position to ({new_pose.position.x:.3f}, {new_pose.position.y:.3f}, {new_pose.position.z:.3f})"
-    #         )
-    #         # Update the pose on the server.
-    #         self.server.setPose(feedback.marker_name, new_pose)
-    #     # You can add additional processing for BUTTON_CLICK, MENU_SELECT, etc.
-    #     self.server.applyChanges()
-
+                self.get_logger().debug("Task is out-of-workspace. Resetting to last valid pose.")
+                # Reset the marker pose to the last known valid in-workspace pose
+                self.server.setPose(feedback.marker_name, self.last_valid_task_pose)
+                self.server.applyChanges()
+        
     def makeBox(self, fixed, scale, marker_type, initial_pose):
         marker = Marker()
         marker.type = marker_type
@@ -292,7 +307,7 @@ class BasicControlsNode(Node):
             marker.color.a = 1.0
         return marker
 
-    def makeBoxControl(self, msg, fixed, interaction_mode, marker_type, scale = 1.0, show_6dof =False, initial_pose = Pose()):
+    def makeBoxControl(self, msg, fixed, interaction_mode, marker_type, scale = 1.0, show_6dof =False, initial_pose = Pose(), ignore_dof=[]):
         control = InteractiveMarkerControl()
         control.always_visible = True
         control.markers.append(self.makeBox(fixed, scale, marker_type, initial_pose))
@@ -300,100 +315,105 @@ class BasicControlsNode(Node):
         msg.controls.append(control)
 
         if show_6dof:
+            if 'roll' not in ignore_dof:
+                control = InteractiveMarkerControl()
+                control.orientation.w = 1.0
+                control.orientation.x = 1.0
+                control.orientation.y = 0.0
+                control.orientation.z = 0.0
+                control.name = "roll"
+                control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
+                if fixed:
+                    control.orientation_mode = InteractiveMarkerControl.FIXED
+                msg.controls.append(control)
 
-            # control = InteractiveMarkerControl()
-            # control.orientation.w = 1.0
-            # control.orientation.x = 1.0
-            # control.orientation.y = 0.0
-            # control.orientation.z = 0.0
-            # control.name = "roll"
-            # control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-            # if fixed:
-            #     control.orientation_mode = InteractiveMarkerControl.FIXED
-            # msg.controls.append(control)
+            if 'surge' not in ignore_dof:
+                control = InteractiveMarkerControl()
+                control.orientation.w = 1.0
+                control.orientation.x = 1.0
+                control.orientation.y = 0.0
+                control.orientation.z = 0.0
+                control.name = "surge"
+                control.interaction_mode = InteractiveMarkerControl.MOVE_AXIS
+                if fixed:
+                    control.orientation_mode = InteractiveMarkerControl.FIXED
+                msg.controls.append(control)
 
-            control = InteractiveMarkerControl()
-            control.orientation.w = 1.0
-            control.orientation.x = 1.0
-            control.orientation.y = 0.0
-            control.orientation.z = 0.0
-            control.name = "surge"
-            control.interaction_mode = InteractiveMarkerControl.MOVE_AXIS
-            if fixed:
-                control.orientation_mode = InteractiveMarkerControl.FIXED
-            msg.controls.append(control)
+            if 'yaw' not in ignore_dof:
+                control = InteractiveMarkerControl()
+                control.orientation.w = 1.0
+                control.orientation.x = 0.0
+                control.orientation.y = 1.0
+                control.orientation.z = 0.0
+                control.name = "yaw"
+                control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
+                if fixed:
+                    control.orientation_mode = InteractiveMarkerControl.FIXED
+                msg.controls.append(control)
 
-            control = InteractiveMarkerControl()
-            control.orientation.w = 1.0
-            control.orientation.x = 0.0
-            control.orientation.y = 1.0
-            control.orientation.z = 0.0
-            control.name = "yaw"
-            control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-            if fixed:
-                control.orientation_mode = InteractiveMarkerControl.FIXED
-            msg.controls.append(control)
+            if 'heave' not in ignore_dof:
+                control = InteractiveMarkerControl()
+                control.orientation.w = 1.0
+                control.orientation.x = 0.0
+                control.orientation.y = 1.0
+                control.orientation.z = 0.0
+                control.name = "heave"
+                control.interaction_mode = InteractiveMarkerControl.MOVE_AXIS
+                if fixed:
+                    control.orientation_mode = InteractiveMarkerControl.FIXED
+                msg.controls.append(control)
 
-            control = InteractiveMarkerControl()
-            control.orientation.w = 1.0
-            control.orientation.x = 0.0
-            control.orientation.y = 1.0
-            control.orientation.z = 0.0
-            control.name = "heave"
-            control.interaction_mode = InteractiveMarkerControl.MOVE_AXIS
-            if fixed:
-                control.orientation_mode = InteractiveMarkerControl.FIXED
-            msg.controls.append(control)
+            if 'pitch' not in ignore_dof:
+                control = InteractiveMarkerControl()
+                control.orientation.w = 1.0
+                control.orientation.x = 0.0
+                control.orientation.y = 0.0
+                control.orientation.z = 1.0
+                control.name = "pitch"
+                control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
+                if fixed:
+                    control.orientation_mode = InteractiveMarkerControl.FIXED
+                msg.controls.append(control)
 
-            # control = InteractiveMarkerControl()
-            # control.orientation.w = 1.0
-            # control.orientation.x = 0.0
-            # control.orientation.y = 0.0
-            # control.orientation.z = 1.0
-            # control.name = "pitch"
-            # control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-            # if fixed:
-            #     control.orientation_mode = InteractiveMarkerControl.FIXED
-            # msg.controls.append(control)
-
-            control = InteractiveMarkerControl()
-            control.orientation.w = 1.0
-            control.orientation.x = 0.0
-            control.orientation.y = 0.0
-            control.orientation.z = 1.0
-            control.name = "sway"
-            control.interaction_mode = InteractiveMarkerControl.MOVE_AXIS
-            if fixed:
-                control.orientation_mode = InteractiveMarkerControl.FIXED
-            msg.controls.append(control)
+            if 'sway' not in ignore_dof:
+                control = InteractiveMarkerControl()
+                control.orientation.w = 1.0
+                control.orientation.x = 0.0
+                control.orientation.y = 0.0
+                control.orientation.z = 1.0
+                control.name = "sway"
+                control.interaction_mode = InteractiveMarkerControl.MOVE_AXIS
+                if fixed:
+                    control.orientation_mode = InteractiveMarkerControl.FIXED
+                msg.controls.append(control)
         return control
 
-    def make_UVMS_Dof_Marker(self, name, description, frame_id, robot, fixed, interaction_mode, initial_position, callback, 
-                       show_6dof=False):
+    def make_UVMS_Dof_Marker(self, name, description, frame_id, robot, fixed, interaction_mode, initial_position, scale,
+                       show_6dof=False, ignore_dof=[]):
         int_marker = InteractiveMarker()
         int_marker.header.frame_id = frame_id
         int_marker.pose.position = initial_position
-        int_marker.scale = 1.0
+        int_marker.scale = scale
         int_marker.name = name
         int_marker.description = description
-        self.makeBoxControl(int_marker, fixed, interaction_mode, Marker.CUBE, int_marker.scale, show_6dof, Pose())
+        marker_type = Marker.CUBE
+        if robot == 'task':
+            marker_type = Marker.SPHERE
+        self.makeBoxControl(int_marker, fixed, interaction_mode, marker_type, int_marker.scale, show_6dof, Pose(), ignore_dof)
 
-        if robot == 'uvms':
-            self.makeBoxControl(int_marker, True, InteractiveMarkerControl.NONE, Marker.CUBE, 0.2, False ,self.arm_base_pose)
-            initial_task_pose = self.compute_end_effector_pose(self.arm_base_pose)
-            self.makeBoxControl(int_marker, False, InteractiveMarkerControl.MOVE_ROTATE_3D, Marker.SPHERE, 0.2, True, initial_task_pose)
+        if robot == 'uv':
+            self.makeBoxControl(int_marker, True, InteractiveMarkerControl.NONE, Marker.CUBE, 0.2, False ,self.arm_base_pose, ignore_dof)
 
+        return int_marker
+
+    def make_menu_control(self):
         # Add a menu control to the marker.
         menu_control = InteractiveMarkerControl()
         menu_control.interaction_mode = InteractiveMarkerControl.MENU
         menu_control.name = "robots_control_menu"
         menu_control.description = "target"
         menu_control.always_visible = True
-        int_marker.controls.append(copy.deepcopy(menu_control))
-
-        self.server.insert(int_marker)
-        self.server.setCallback(int_marker.name, callback)
-        self.menu_handler.apply(self.server, int_marker.name)
+        return menu_control
 
     def compute_end_effector_pose(self, arm_base_pose):
         # Extract arm base position and orientation.
@@ -424,6 +444,16 @@ class BasicControlsNode(Node):
         end_effector_pose.orientation.x, end_effector_pose.orientation.y, end_effector_pose.orientation.z, end_effector_pose.orientation.w = end_effector_orientation
 
         return end_effector_pose
+
+    def is_point_in_convex_workspace(self, point, hull):
+        """
+        Check if a point (3,) is inside the convex hull using its inequalities.
+        
+        Each row in hull.equations is of the form [a, b, c, d], representing
+        the inequality a*x + b*y + c*z + d <= 0.
+        """
+        # Evaluate the inequality for all facets. The point is inside if all inequalities are satisfied.
+        return np.all(np.dot(hull.equations[:, :-1], point) + hull.equations[:, -1] <= 0)
 
     def broadcast_pose(self, pose, parent_frame, child_frame):
         """
