@@ -58,16 +58,18 @@ class BasicControlsNode(Node):
         qos_profile = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10)
         self.uvms_publisher_ = self.create_publisher(Command, '/uvms_controller/uvms/commands', qos_profile)
 
-        self.pc_publisher_ = self.create_publisher(PointCloud2, 'workspace_pointcloud', 10)
+        self.taskspace_pc_publisher_ = self.create_publisher(PointCloud2, 'workspace_pointcloud', 10)
+        self.rov_pc_publisher_ = self.create_publisher(PointCloud2, 'base_pointcloud', 10)
         package_share_directory = ament_index_python.get_package_share_directory(
                         'simlab')
         workspace_pts_path = os.path.join(package_share_directory, 'workspace.npy')
         self.workspace_pts = np.load(workspace_pts_path)
-        # Convert positions to a list of [x, y, z] points
-        self.workspace_pts_list = self.workspace_pts.tolist()
         # Precompute convex hull from your workspace points (positions_fb: (N x 3) array)
         self.hull = ConvexHull(self.workspace_pts)
 
+        # Convert positions to a list of [x, y, z] points
+        self.workspace_pts_list = self.workspace_pts.tolist()
+        self.rov_ellipsoid_cl_pts = self.generate_rov_ellipsoid(a=0.3, b=0.3, c=0.2, num_points=10000)
         self.get_logger().info("Loaded workspace positions.")
 
         frequency = 500  # Hz
@@ -165,7 +167,10 @@ class BasicControlsNode(Node):
         # Create the PointCloud2 message
         self.header.stamp = self.get_clock().now().to_msg()
         cloud_msg = pc2.create_cloud_xyz32(self.header, self.workspace_pts_list)
-        self.pc_publisher_.publish(cloud_msg)
+        self.taskspace_pc_publisher_.publish(cloud_msg)
+
+        cloud_msg = pc2.create_cloud_xyz32(self.header, self.rov_ellipsoid_cl_pts)
+        self.rov_pc_publisher_.publish(cloud_msg)
         self.get_logger().debug("Published workspace point cloud.")
 
 
@@ -231,7 +236,7 @@ class BasicControlsNode(Node):
                     target_pos = np.array([x_ned, y_ned, z_ned, target_roll, target_pitch, target_yaw])
                     error = np.linalg.norm(current_pos - target_pos)
                     self.get_logger().debug(f"Target error: {error}")
-                    if error < 0.1:  # threshold in meters
+                    if error < 0.01:  # threshold in meters
                         self.get_logger().info("Target reached; resetting execution flag.")
                         self.execute_plan = False
                 else:
@@ -454,6 +459,35 @@ class BasicControlsNode(Node):
         """
         # Evaluate the inequality for all facets. The point is inside if all inequalities are satisfied.
         return np.all(np.dot(hull.equations[:, :-1], point) + hull.equations[:, -1] <= 0)
+
+    def generate_rov_ellipsoid(self, a=0.5, b=0.3, c=0.2, num_points=10000):
+        """
+        Generate a point cloud approximating the BlueROV Heavy's rigid body as an ellipsoid.
+
+        Parameters:
+            a (float): Half-length along the x-axis (default 0.5).
+            b (float): Half-length along the y-axis (default 0.3).
+            c (float): Half-length along the z-axis (default 0.2).
+            num_points (int): Number of points to generate (default 10000).
+
+        Returns:
+            np.ndarray: A (num_points, 3) array representing the point cloud.
+        """
+        # Initialize an empty list to store the generated points
+        points = []
+
+        # Generate points inside the ellipsoid using the ellipsoid equation:
+        # (x/a)^2 + (y/b)^2 + (z/c)^2 <= 1
+        while len(points) < num_points:
+            # Generate a random point within a cube that encloses the ellipsoid
+            point = np.random.uniform(-1, 1, 3)
+            # Check if the point lies within the ellipsoid
+            if (point[0] / a) ** 2 + (point[1] / b) ** 2 + (point[2] / c) ** 2 <= 1:
+                points.append(point)
+
+        # Convert the list of points to a NumPy array with shape (num_points, 3)
+        points = np.array(points)
+        return points
 
     def broadcast_pose(self, pose, parent_frame, child_frame):
         """
