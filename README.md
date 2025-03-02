@@ -89,5 +89,3 @@ ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
 ## Contributions
 
 Contributions are welcome! Please fork the repository and submit a pull request.
-
----
