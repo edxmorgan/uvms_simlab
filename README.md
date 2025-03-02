@@ -1,7 +1,3 @@
-Below is an updated version of your README that emphasizes interactive marker control, self collision avoidance, and other key features:
-
----
-
 # uvms_simlab
 
 **uvms_simlab** extends [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) with advanced features including **Interactive Marker Control**, **Self Collision Avoidance**, PS4 joystick support for teleoperation, and the capability to execute coverage plans—usable both in simulation and on real hardware.
