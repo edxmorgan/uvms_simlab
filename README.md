@@ -91,5 +91,3 @@ ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
 Contributions are welcome! Please fork the repository and submit a pull request.
 
 ---
-
-This updated README brings the **Interactive Marker Control** to the forefront while clearly highlighting the system's advanced features, such as **Self Collision Avoidance** and other essential functionalities.
