@@ -462,7 +462,6 @@ class Robot(Base):
     
         package_share_directory = ament_index_python.get_package_share_directory(
                 'simlab')
-        diff_iK_path = os.path.join(package_share_directory, 'diff_iK.casadi')
         fk_path = os.path.join(package_share_directory, 'fk_eval.casadi')
 
         vehicle_C_path = os.path.join(package_share_directory, 'vehicle/C.casadi')
@@ -472,7 +471,6 @@ class Robot(Base):
         manipulator_C_path = os.path.join(package_share_directory, 'manipulator/C.casadi')
         manipulator_M_path = os.path.join(package_share_directory, 'manipulator/M.casadi')
 
-        self.diff_iK = ca.Function.load(diff_iK_path) # differential inverse kinematics
         self.fk_eval = ca.Function.load(fk_path) # differential inverse kinematics
 
         self.vehicle_C = ca.Function.load(vehicle_C_path)
