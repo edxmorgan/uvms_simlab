@@ -16,7 +16,6 @@ from rclpy.qos import QoSProfile, QoSHistoryPolicy
 from uvms_interfaces.msg import Command
 from robot import Robot
 import tf2_ros
-from tf_transformations import quaternion_multiply, quaternion_from_euler
 from geometry_msgs.msg import TransformStamped
 import ament_index_python
 import os
@@ -26,6 +25,7 @@ import sensor_msgs_py.point_cloud2 as pc2
 from scipy.spatial import ConvexHull
 from blue_rov import Params as blue
 from alpha_reach import Params as alpha
+from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
 def quaternion_to_euler(orientation):
     quat = [orientation.x, orientation.y, orientation.z, orientation.w]
@@ -161,7 +161,6 @@ class BasicControlsNode(Node):
             show_6dof=True,
             ignore_dof=['yaw']
         )
-        self.task_wrt_base_link = copy.copy(self.last_valid_task_pose)
 
         self.server.insert(self.task_marker)
         self.server.setCallback(self.task_marker.name, self.processFeedback)
@@ -184,27 +183,6 @@ class BasicControlsNode(Node):
         self.rov_pc_publisher_.publish(cloud_msg)
 
         self.broadcast_pose(self.last_vehicle_marker_pose, self.base_frame, self.vehicle_marker_frame)
-        self.broadcast_pose(self.last_valid_task_pose, self.vehicle_marker_frame, self.endeffector_marker_frame)
-
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                self.base_frame,
-                self.endeffector_marker_frame,
-                rclpy.time.Time()
-            )
-            pose = Pose()
-            pose.position.x = transform.transform.translation.x
-            pose.position.y = transform.transform.translation.y
-            pose.position.z = transform.transform.translation.z
-            pose.orientation.x = transform.transform.rotation.x
-            pose.orientation.y = transform.transform.rotation.y
-            pose.orientation.z = transform.transform.rotation.z
-            pose.orientation.w = transform.transform.rotation.w
-
-            self.task_wrt_base_link = pose
-        except Exception as e:
-            # self.get_logger().warn(f"Transform not available: {e}")
-            pass
 
         command_msg = Command()
         command_msg.command_type = self.controllers
@@ -251,10 +229,16 @@ class BasicControlsNode(Node):
                     ])
 
 
-                    current_pos = np.array(state['pose'])
-                    target_pos = np.array([x_ned, y_ned, z_ned, target_roll, target_pitch, target_yaw])
-                    error = np.linalg.norm(current_pos - target_pos)
-                    if error < 0.01:
+                    vehicle_current_pos = np.array(state['pose'])
+                    vehicle_target_pos = np.array([x_ned, y_ned, z_ned, target_roll, target_pitch,
+                                            target_yaw])
+                    vehicle_error = np.linalg.norm(vehicle_current_pos - vehicle_target_pos)
+                    
+                    manipulator_current_pos = np.array(state['q'])
+                    manipulator_target_pos = np.array([self.q0_des, self.q1_des, self.q2_des, self.q3_des])
+                    manipulator_error = np.linalg.norm(manipulator_current_pos - manipulator_target_pos)
+                    
+                    if vehicle_error < 0.01 and manipulator_error < 0.01:
                         self.get_logger().info("Target reached; resetting execution flag.")
                         self.execute_plan = False
                 else:
@@ -298,72 +282,13 @@ class BasicControlsNode(Node):
                         feedback.pose.position.z])
                 if self.is_point_valid(task_point):
                     self.last_valid_task_pose = feedback.pose
+                    relative_pose = self.get_relative_pose(self.arm_base_pose, self.last_valid_task_pose)
 
-                    # desired_q_orientation = [
-                    #     self.task_wrt_base_link.orientation.x,
-                    #     self.task_wrt_base_link.orientation.y,
-                    #     self.task_wrt_base_link.orientation.z,
-                    #     self.task_wrt_base_link.orientation.w
-                    # ]
+                    self.q0_des, self.q1_des, self.q2_des = self.robots[self.selected_robot_index].arm.ik_solver([relative_pose.position.x,
+                                                                          relative_pose.position.y,
+                                                                          relative_pose.position.z])
+                    self.get_logger().debug(f"Robot taskspace ik at {self.q0_des, self.q1_des, self.q2_des, self.q3_des} selected for planning.")
 
-                    # # Unpack the Euler angles from the returned array.
-                    # roll, pitch, yaw = R.from_quat(desired_q_orientation).as_euler('xyz', degrees=False)
-
-                    # des_X = ca.DM([
-                    #     self.task_wrt_base_link.position.x,
-                    #     self.task_wrt_base_link.position.y,
-                    #     self.task_wrt_base_link.position.z,
-                    #     roll,
-                    #     pitch,
-                    #     yaw
-                    # ])  # Desired end-effector pose
-                    
-                    # uvms_ll = ca.DM([-1000, -1000, -1000, -0.5, -0.5, -1000, 1, 0.01, 0.01, 0.01])
-                    # uvms_ul = ca.DM([1000, 1000, 1000, 0.5, 0.5, 1000, 5.50, 3.40, 3.40, 5.70])
-                    # k0 = ca.DM([0.05, 0.05, 0.05, 0.05, 0.05, 0.05])
-                    # base_T = alpha.base_T0
-                    # dt = ca.DM(0.08)  # Time step
-                    # Kp_ik= [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-
-                    # n_et_history, dn_et_history, x_err_history = self.uvms_IK(
-                    #     self.n_int_est,
-                    #     des_X,
-                    #     uvms_ul,
-                    #     uvms_ll,
-                    #     k0,
-                    #     Kp_ik,
-                    #     base_T,
-                    #     dt)
-                    # err = np.linalg.norm(x_err_history.full().T[-1,:])
-                    # if err < 0.05:
-                    #     self.get_logger().info(f"{n_et_history.full().flatten().tolist()}")
-                    #     self.get_logger().info(f" error: {err}")
-                        # resolved_ik = n_et_history.T.full().flatten()
-                        # modified_uv_pose = Pose()
-                        # modified_uv_pose.position.x = resolved_ik[0]
-                        # modified_uv_pose.position.y = resolved_ik[1]
-                        # modified_uv_pose.position.z = resolved_ik[2]
-                        # new_r = R.from_euler('xyz', resolved_ik[3:6])
-                        # new_q = new_r.as_quat()
-                        # modified_uv_pose.orientation.x = new_q[0]
-                        # modified_uv_pose.orientation.y = new_q[1]
-                        # modified_uv_pose.orientation.z = new_q[2]
-                        # modified_uv_pose.orientation.w = new_q[3]
-
-                        # [self.q0_des, self.q1_des, self.q2_des, self.q3_des] = resolved_ik[6:10]
-
-
-                        # self.server.setPose("uv_marker", modified_uv_pose)
-                        # self.server.applyChanges()
-                        # self.last_vehicle_marker_pose = modified_uv_pose
-
-                        # self.n_desired = ca.DM(n_et_history.T.full())
-                        # Update the initial guess for the next iteration
-                        # self.n_int_est = ca.DM(n_et_history.T.full().flatten())
-                        # 
-                        # dn_et_history.T[-1,:].full()
-                    # else:
-                    #     self.get_logger().warn(f"task IK solution not found {err}")
                 else:
                     self.server.setPose(feedback.marker_name, self.last_valid_task_pose)
                     self.server.applyChanges()
@@ -545,6 +470,36 @@ class BasicControlsNode(Node):
         pose.orientation.z = q[2]
         pose.orientation.w = q[3]
         return pose
+
+
+    def pose_to_homogeneous(self, pose):
+        """Convert a geometry_msgs/Pose into a 4x4 homogeneous transformation matrix."""
+        quat = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+        trans = [pose.position.x, pose.position.y, pose.position.z]
+        mat = quaternion_matrix(quat)
+        mat[0:3, 3] = trans
+        return mat
+
+    def homogeneous_to_pose(self, mat):
+        """Convert a 4x4 homogeneous transformation matrix into a geometry_msgs/Pose."""
+        pose = Pose()
+        pose.position.x = mat[0, 3]
+        pose.position.y = mat[1, 3]
+        pose.position.z = mat[2, 3]
+        quat = quaternion_from_matrix(mat)
+        pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = quat
+        return pose
+
+    def get_relative_pose(self, marker_pose, endeffector_pose):
+        """
+        Compute the relative pose of the endeffector with respect to the marker.
+        marker_pose and endeffector_pose should be geometry_msgs/Pose.
+        Returns a Pose representing the endeffector pose in the marker's frame.
+        """
+        T_marker = self.pose_to_homogeneous(marker_pose)
+        T_ee = self.pose_to_homogeneous(endeffector_pose)
+        T_rel = np.dot(np.linalg.inv(T_marker), T_ee)
+        return self.homogeneous_to_pose(T_rel)
 
 def main(args=None):
     rclpy.init(args=args)
