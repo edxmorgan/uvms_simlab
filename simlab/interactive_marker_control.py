@@ -7,7 +7,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation as R
-
+import casadi as ca
 from geometry_msgs.msg import Pose
 from visualization_msgs.msg import Marker, InteractiveMarker, InteractiveMarkerControl, InteractiveMarkerFeedback
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer
@@ -24,6 +24,8 @@ from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Header
 import sensor_msgs_py.point_cloud2 as pc2
 from scipy.spatial import ConvexHull
+from blue_rov import Params as blue
+from alpha_reach import Params as alpha
 
 def quaternion_to_euler(orientation):
     quat = [orientation.x, orientation.y, orientation.z, orientation.w]
@@ -39,7 +41,16 @@ class BasicControlsNode(Node):
         super().__init__('uvms_interactive_controls',
                          automatically_declare_parameters_from_overrides=True)
         
+        package_share_directory = ament_index_python.get_package_share_directory('simlab')
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        uvms_IK_path = os.path.join(package_share_directory, 'uvms_iK.casadi')
+        self.uvms_IK = ca.Function.load(uvms_IK_path)
+
+        uvms_FK_path = os.path.join(package_share_directory, 'fk_eval.casadi')
+        self.uvms_FK = ca.Function.load(uvms_FK_path)
 
         # Example: get some parameters
         self.no_robot = self.get_parameter('no_robot').value
@@ -54,7 +65,7 @@ class BasicControlsNode(Node):
 
         self.taskspace_pc_publisher_ = self.create_publisher(PointCloud2, 'workspace_pointcloud', 10)
         self.rov_pc_publisher_ = self.create_publisher(PointCloud2, 'base_pointcloud', 10)
-        package_share_directory = ament_index_python.get_package_share_directory('simlab')
+
         workspace_pts_path = os.path.join(package_share_directory, 'workspace.npy')
         self.workspace_pts = np.load(workspace_pts_path)
         self.workspace_hull = ConvexHull(self.workspace_pts)
@@ -70,9 +81,9 @@ class BasicControlsNode(Node):
         self.robots = [Robot(self, k, 4, prefix, initial_pos, self.record)
                        for k, prefix in enumerate(self.robots_prefix)]
 
-        self.last_marker_pose = Pose()
-        self.last_marker_pose.orientation.w = 1.0
-        self.selected_robot_index = None
+        self.last_vehicle_marker_pose = Pose()
+        self.last_vehicle_marker_pose.orientation.w = 1.0
+        self.selected_robot_index = 0 # by default robot 0 is selected
         self.execute_plan = False
 
         self.arm_base_pose = Pose()
@@ -95,7 +106,8 @@ class BasicControlsNode(Node):
             self.menu_handler.insert(f"{prefix} plan", parent=sub_menu_handle, callback=self.processFeedback)
 
         self.base_frame = "base_link"
-        self.marker_frame = "marker_frame"
+        self.vehicle_marker_frame = "vehicle_marker_frame"
+        self.endeffector_marker_frame = "endeffector_marker_frame"
 
         # Create markers
         self.uv_marker = self.make_UVMS_Dof_Marker(
@@ -105,7 +117,7 @@ class BasicControlsNode(Node):
             robot='uv',
             fixed=False,
             interaction_mode=InteractiveMarkerControl.MOVE_ROTATE_3D,
-            initial_position=self.last_marker_pose.position,
+            initial_pose=self.last_vehicle_marker_pose,
             scale=1.0,
             show_6dof=True,
             ignore_dof=['roll','pitch']
@@ -114,20 +126,42 @@ class BasicControlsNode(Node):
         self.server.insert(self.uv_marker)
         self.server.setCallback(self.uv_marker.name, self.processFeedback)
 
-        initial_task_pose = self.compute_end_effector_pose(self.arm_base_pose)
-        self.last_valid_task_pose = initial_task_pose
+        desired_q_orientation = [
+                self.last_vehicle_marker_pose.orientation.x,
+                self.last_vehicle_marker_pose.orientation.y,
+                self.last_vehicle_marker_pose.orientation.z,
+                self.last_vehicle_marker_pose.orientation.w
+            ]
+
+        # Unpack the Euler angles from the returned array.
+        roll, pitch, yaw = R.from_quat(desired_q_orientation).as_euler('xyz', degrees=False)
+        self.q0_des, self.q1_des, self.q2_des, self.q3_des = 3.1, 0.7, 0.4, 2.1
+        self.n_int_est = ca.DM([self.last_vehicle_marker_pose.position.x,
+                      self.last_vehicle_marker_pose.position.y,
+                      self.last_vehicle_marker_pose.position.z,
+                      roll,
+                      pitch,
+                      yaw,
+                      self.q0_des,
+                      self.q1_des,
+                      self.q2_des, 
+                      self.q3_des])
+        temp_dm = self.uvms_FK(self.n_int_est, alpha.base_T0)
+        self.last_valid_task_pose = self.dm_to_pose(temp_dm)
+
         self.task_marker = self.make_UVMS_Dof_Marker(
             name='task_marker',
             description='interactive marker for controlling endeffector',
-            frame_id=self.marker_frame,
+            frame_id=self.vehicle_marker_frame,
             robot='task',
             fixed=False,
             interaction_mode=InteractiveMarkerControl.MOVE_ROTATE_3D,
-            initial_position=initial_task_pose.position,
+            initial_pose=self.last_valid_task_pose,
             scale=0.2,
             show_6dof=True,
             ignore_dof=['yaw']
         )
+        self.task_wrt_base_link = copy.copy(self.last_valid_task_pose)
 
         self.server.insert(self.task_marker)
         self.server.setCallback(self.task_marker.name, self.processFeedback)
@@ -139,7 +173,7 @@ class BasicControlsNode(Node):
 
         self.server.applyChanges()
         self.header = Header()
-        self.header.frame_id = self.marker_frame
+        self.header.frame_id = self.vehicle_marker_frame
 
     def timer_callback(self):
         self.header.stamp = self.get_clock().now().to_msg()
@@ -149,7 +183,29 @@ class BasicControlsNode(Node):
         cloud_msg = pc2.create_cloud_xyz32(self.header, self.rov_ellipsoid_cl_pts)
         self.rov_pc_publisher_.publish(cloud_msg)
 
-        self.broadcast_pose(self.last_marker_pose, self.base_frame, self.marker_frame)
+        self.broadcast_pose(self.last_vehicle_marker_pose, self.base_frame, self.vehicle_marker_frame)
+        self.broadcast_pose(self.last_valid_task_pose, self.vehicle_marker_frame, self.endeffector_marker_frame)
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.base_frame,
+                self.endeffector_marker_frame,
+                rclpy.time.Time()
+            )
+            pose = Pose()
+            pose.position.x = transform.transform.translation.x
+            pose.position.y = transform.transform.translation.y
+            pose.position.z = transform.transform.translation.z
+            pose.orientation.x = transform.transform.rotation.x
+            pose.orientation.y = transform.transform.rotation.y
+            pose.orientation.z = transform.transform.rotation.z
+            pose.orientation.w = transform.transform.rotation.w
+
+            self.task_wrt_base_link = pose
+        except Exception as e:
+            # self.get_logger().warn(f"Transform not available: {e}")
+            pass
+
         command_msg = Command()
         command_msg.command_type = self.controllers
         command_msg.acceleration.data = []
@@ -163,8 +219,8 @@ class BasicControlsNode(Node):
                 command_msg.twist.data.extend([0.0]*self.no_efforts)
                 robot.publish_robot_path()
 
-                if self.execute_plan and (k == self.selected_robot_index) and (self.last_marker_pose is not None):
-                    planned = self.last_marker_pose
+                if self.execute_plan and (k == self.selected_robot_index) and (self.last_vehicle_marker_pose is not None):
+                    planned = self.last_vehicle_marker_pose
                     x_nwu = planned.position.x
                     y_nwu = planned.position.y
                     z_nwu = planned.position.z
@@ -187,13 +243,13 @@ class BasicControlsNode(Node):
                     target_pitch = curr_pitch + delta_pitch
                     target_yaw = curr_yaw + delta_yaw
 
-                    q0, q1, q2, q3 = state['q']
                     command_msg.pose.data.extend([
                         x_ned, y_ned, z_ned,
                         target_roll, target_pitch, target_yaw,
-                        q0, q1, q2, q3,
+                        self.q0_des, self.q1_des, self.q2_des, self.q3_des,
                         0.0
                     ])
+
 
                     current_pos = np.array(state['pose'])
                     target_pos = np.array([x_ned, y_ned, z_ned, target_roll, target_pitch, target_yaw])
@@ -212,14 +268,14 @@ class BasicControlsNode(Node):
         # For uv_marker
         if feedback.marker_name == "uv_marker":
             if feedback.pose:
-                self.last_marker_pose = feedback.pose
+                self.last_vehicle_marker_pose = feedback.pose
                 if feedback.pose.position.z > 0.0:
                     feedback.pose.position.z = 0.0
                     self.server.setPose(feedback.marker_name, feedback.pose)
                     self.server.applyChanges()
             if feedback.event_type == InteractiveMarkerFeedback.MENU_SELECT:
                 if feedback.menu_entry_id == 1: 
-                    if self.selected_robot_index is not None and self.last_marker_pose is not None:
+                    if self.selected_robot_index is not None and self.last_vehicle_marker_pose is not None:
                         self.execute_plan = True
                         self.get_logger().info(
                             f"Execute clicked: plan will be applied to robot {self.robots_prefix[self.selected_robot_index]}."
@@ -236,14 +292,81 @@ class BasicControlsNode(Node):
 
         # For task_marker
         if feedback.marker_name == "task_marker":
-            task_point = np.array([feedback.pose.position.x,
-                                   feedback.pose.position.y,
-                                   feedback.pose.position.z])
-            if self.is_point_valid(task_point):
-                self.last_valid_task_pose = feedback.pose
-            else:
-                self.server.setPose(feedback.marker_name, self.last_valid_task_pose)
-                self.server.applyChanges()
+            if feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
+                task_point = np.array([feedback.pose.position.x,
+                        feedback.pose.position.y,
+                        feedback.pose.position.z])
+                if self.is_point_valid(task_point):
+                    self.last_valid_task_pose = feedback.pose
+
+                    # desired_q_orientation = [
+                    #     self.task_wrt_base_link.orientation.x,
+                    #     self.task_wrt_base_link.orientation.y,
+                    #     self.task_wrt_base_link.orientation.z,
+                    #     self.task_wrt_base_link.orientation.w
+                    # ]
+
+                    # # Unpack the Euler angles from the returned array.
+                    # roll, pitch, yaw = R.from_quat(desired_q_orientation).as_euler('xyz', degrees=False)
+
+                    # des_X = ca.DM([
+                    #     self.task_wrt_base_link.position.x,
+                    #     self.task_wrt_base_link.position.y,
+                    #     self.task_wrt_base_link.position.z,
+                    #     roll,
+                    #     pitch,
+                    #     yaw
+                    # ])  # Desired end-effector pose
+                    
+                    # uvms_ll = ca.DM([-1000, -1000, -1000, -0.5, -0.5, -1000, 1, 0.01, 0.01, 0.01])
+                    # uvms_ul = ca.DM([1000, 1000, 1000, 0.5, 0.5, 1000, 5.50, 3.40, 3.40, 5.70])
+                    # k0 = ca.DM([0.05, 0.05, 0.05, 0.05, 0.05, 0.05])
+                    # base_T = alpha.base_T0
+                    # dt = ca.DM(0.08)  # Time step
+                    # Kp_ik= [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+
+                    # n_et_history, dn_et_history, x_err_history = self.uvms_IK(
+                    #     self.n_int_est,
+                    #     des_X,
+                    #     uvms_ul,
+                    #     uvms_ll,
+                    #     k0,
+                    #     Kp_ik,
+                    #     base_T,
+                    #     dt)
+                    # err = np.linalg.norm(x_err_history.full().T[-1,:])
+                    # if err < 0.05:
+                    #     self.get_logger().info(f"{n_et_history.full().flatten().tolist()}")
+                    #     self.get_logger().info(f" error: {err}")
+                        # resolved_ik = n_et_history.T.full().flatten()
+                        # modified_uv_pose = Pose()
+                        # modified_uv_pose.position.x = resolved_ik[0]
+                        # modified_uv_pose.position.y = resolved_ik[1]
+                        # modified_uv_pose.position.z = resolved_ik[2]
+                        # new_r = R.from_euler('xyz', resolved_ik[3:6])
+                        # new_q = new_r.as_quat()
+                        # modified_uv_pose.orientation.x = new_q[0]
+                        # modified_uv_pose.orientation.y = new_q[1]
+                        # modified_uv_pose.orientation.z = new_q[2]
+                        # modified_uv_pose.orientation.w = new_q[3]
+
+                        # [self.q0_des, self.q1_des, self.q2_des, self.q3_des] = resolved_ik[6:10]
+
+
+                        # self.server.setPose("uv_marker", modified_uv_pose)
+                        # self.server.applyChanges()
+                        # self.last_vehicle_marker_pose = modified_uv_pose
+
+                        # self.n_desired = ca.DM(n_et_history.T.full())
+                        # Update the initial guess for the next iteration
+                        # self.n_int_est = ca.DM(n_et_history.T.full().flatten())
+                        # 
+                        # dn_et_history.T[-1,:].full()
+                    # else:
+                    #     self.get_logger().warn(f"task IK solution not found {err}")
+                else:
+                    self.server.setPose(feedback.marker_name, self.last_valid_task_pose)
+                    self.server.applyChanges()
 
     def makeBox(self, fixed, scale, marker_type, initial_pose):
         marker = Marker()
@@ -349,11 +472,11 @@ class BasicControlsNode(Node):
         return control
 
     def make_UVMS_Dof_Marker(self, name, description, frame_id, robot, fixed,
-                            interaction_mode, initial_position, scale,
+                            interaction_mode, initial_pose, scale,
                             show_6dof=False, ignore_dof=[]):
         int_marker = InteractiveMarker()
         int_marker.header.frame_id = frame_id
-        int_marker.pose.position = initial_position
+        int_marker.pose = initial_pose
         int_marker.scale = scale
         int_marker.name = name
         int_marker.description = description
@@ -373,32 +496,6 @@ class BasicControlsNode(Node):
         menu_control.description = "target"
         menu_control.always_visible = True
         return menu_control
-
-    def compute_end_effector_pose(self, arm_base_pose):
-        base_position = np.array([arm_base_pose.position.x,
-                                  arm_base_pose.position.y,
-                                  arm_base_pose.position.z])
-        base_orientation = [arm_base_pose.orientation.x,
-                            arm_base_pose.orientation.y,
-                            arm_base_pose.orientation.z,
-                            arm_base_pose.orientation.w]
-        relative_offset_position = np.array([0.1, 0.0, 0.0])
-        relative_offset_orientation = quaternion_from_euler(0.0, 0.0, 0.0)
-
-        rotation_matrix = R.from_quat(base_orientation).as_matrix()
-        offset_rotated = rotation_matrix.dot(relative_offset_position)
-        end_effector_position = base_position + offset_rotated
-
-        end_effector_orientation = quaternion_multiply(base_orientation, relative_offset_orientation)
-        end_effector_pose = Pose()
-        end_effector_pose.position.x = end_effector_position[0]
-        end_effector_pose.position.y = end_effector_position[1]
-        end_effector_pose.position.z = end_effector_position[2]
-        end_effector_pose.orientation.x = end_effector_orientation[0]
-        end_effector_pose.orientation.y = end_effector_orientation[1]
-        end_effector_pose.orientation.z = end_effector_orientation[2]
-        end_effector_pose.orientation.w = end_effector_orientation[3]
-        return end_effector_pose
 
     def is_point_valid(self, point):
         """
@@ -433,6 +530,21 @@ class BasicControlsNode(Node):
         t.transform.translation.z = pose.position.z
         t.transform.rotation = pose.orientation
         self.tf_broadcaster.sendTransform(t)
+
+    def dm_to_pose(self, dm):
+        pose = Pose()
+        pose.position.x = float(dm[0])
+        pose.position.y = float(dm[1])
+        pose.position.z = float(dm[2])
+        roll = float(dm[3])
+        pitch = float(dm[4])
+        yaw = float(dm[5])
+        q = R.from_euler('xyz', [roll, pitch, yaw]).as_quat()
+        pose.orientation.x = q[0]
+        pose.orientation.y = q[1]
+        pose.orientation.z = q[2]
+        pose.orientation.w = q[3]
+        return pose
 
 def main(args=None):
     rclpy.init(args=args)

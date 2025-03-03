@@ -10,9 +10,9 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name, ['resource/diff_iK.casadi']),
         ('share/' + package_name, ['resource/fk_eval.casadi']),
         ('share/' + package_name, ['resource/workspace.npy']),
+        ('share/' + package_name, ['resource/uvms_iK.casadi']),
         (
             'share/' + package_name + '/manipulator',
             glob('resource/manipulator/*')
