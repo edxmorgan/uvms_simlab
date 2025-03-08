@@ -314,6 +314,8 @@ class Axis_Interface_names:
     dvl_speed_y = "dvl_speed_y"
     dvl_speed_z = "dvl_speed_z"
 
+    gt_x, gt_y, gt_z = 'gt_x', 'gt_y', 'gt_z'
+    gt_roll, gt_pitch, gt_yaw = 'gt_roll', 'gt_pitch', 'gt_yaw'
     
 class Manipulator(Base):
     def __init__(self, node: Node, n_joint, prefix):
@@ -510,6 +512,7 @@ class Robot(Base):
         self.body_vel = [0] * 6
         self.sensor_reading = [0] * len(self.sensors)
         self.body_forces = [0] * 6
+        self.gt_measurements = [0] * 6
         self.prefix = prefix
         self.status = 'inactive'
         self.sim_time = 0.0
@@ -657,6 +660,19 @@ class Robot(Base):
             Axis_Interface_names.floating_torque_z
             ]
         )
+        self.gt_measurements = self.get_interface_value(
+            msg,
+            [self.floating_base] * 6,
+            [
+            Axis_Interface_names.gt_x,
+            Axis_Interface_names.gt_y, 
+            Axis_Interface_names.gt_z,
+            Axis_Interface_names.gt_roll,
+            Axis_Interface_names.gt_pitch,
+            Axis_Interface_names.gt_yaw
+            ]
+        )
+
         dynamics_sim_time = self.get_interface_value(msg,[self.floating_base],[Axis_Interface_names.sim_time])[0]
         if self.status == 'inactive':
             self.start_time = copy.copy(dynamics_sim_time)
@@ -870,7 +886,10 @@ class Robot(Base):
                     'imu_linear_acc_x', 'imu_linear_acc_y','imu_linear_acc_z',
                     'depth_from_pressure2',
                     'dvl_roll', 'dvl_pitch', 'dvl_yaw',
-                    'dvl_speed_x', 'dvl_speed_y', 'dvl_speed_z'
+                    'dvl_speed_x', 'dvl_speed_y', 'dvl_speed_z',
+
+                    'gt_x', 'gt_y', 'gt_z',
+                    'gt_roll', 'gt_pitch', 'gt_yaw',
                 ]
                 self.csv_writer.writerow(columns)
 
@@ -890,6 +909,8 @@ class Robot(Base):
             row_data.extend(info['dq'])
             
             row_data.extend(info['raw_sensor_readings'])
+
+            row_data.extend(self.gt_measurements)
 
             """Write a single row of data to the CSV file."""
             self.csv_writer.writerow(row_data)
