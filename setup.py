@@ -40,6 +40,7 @@ setup(
             'coverage_node = simlab.dive_coverage:main',
             'pwm_test_node = simlab.pwm_test:main',
             'interactive_marker_node = simlab.interactive_marker_control:main',
+            'experimental_node = simlab.experimental_control:main',
         ],
     },
 )

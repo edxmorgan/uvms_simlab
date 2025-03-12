@@ -40,26 +40,26 @@ class PS4Controller(Controller):
         self.heave_max_torque = self.gain * 3.0         # for heave (L2/R2)
         self.orient_max_torque = self.gain * 0.7        # for roll, pitch, yaw
 
-        # # Create a lock specifically for updating gain values.
-        # self.gain_lock = threading.Lock()
+        # Create a lock specifically for updating gain values.
+        self.gain_lock = threading.Lock()
 
-        # # Start a thread to update the gain every few seconds.
-        # # gain randomization for good data collection
-        # self.gain_thread = threading.Thread(target=self._update_gain, daemon=True)
-        # self.gain_thread.start()
+        # Start a thread to update the gain every few seconds.
+        # gain randomization for good data collection
+        self.gain_thread = threading.Thread(target=self._update_gain, daemon=True)
+        self.gain_thread.start()
 
-    # def _update_gain(self):
-    #     """Randomize the gain value every few seconds and update the torque parameters."""
-    #     while True:
-    #         # For example, choose a new gain between 4 and 6.
-    #         new_gain = random.uniform(3, 8)
-    #         with self.gain_lock:
-    #             self.gain = new_gain
-    #             self.max_torque = self.gain * 2.0
-    #             self.heave_max_torque = self.gain * 3.0
-    #             self.orient_max_torque = self.gain * 0.7
-    #         # Keep this gain for 5 seconds.
-    #         time.sleep(5)
+    def _update_gain(self):
+        """Randomize the gain value every few seconds and update the torque parameters."""
+        while True:
+            # For example, choose a new gain between 4 and 6.
+            new_gain = random.uniform(3, 8)
+            with self.gain_lock:
+                self.gain = new_gain
+                self.max_torque = self.gain * 2.0
+                self.heave_max_torque = self.gain * 3.0
+                self.orient_max_torque = self.gain * 0.7
+            # Keep this gain for 5 seconds.
+            time.sleep(5)
 
     # --- Analog stick and button callbacks below ---
     def on_L2_press(self, value):
@@ -533,6 +533,7 @@ class Robot(Base):
         )
         self.path_publisher = self.node.create_publisher(Path, f'/{self.prefix}desiredPath', qos_profile)
         self.trajectory_path_publisher = self.node.create_publisher(Path, f'/{self.prefix}robotPath', qos_profile)
+        self.gt_trajectory_path_publisher = self.node.create_publisher(Path, f'/{self.prefix}gtPath', qos_profile)
 
         self.path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}desiredOpsPath', qos_profile)
         self.trajectory_path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}robotOpsPath', qos_profile)
@@ -547,6 +548,7 @@ class Robot(Base):
        # Initialize path poses
         self.path_poses = []
         self.traj_path_poses = []
+        self.gt_traj_path_poses = []
 
         self.path_ops_poses = []
         self.traj_path__ops_poses = []
@@ -810,6 +812,40 @@ class Robot(Base):
 
         self.trajectory_path_publisher.publish(tra_path_msg)
 
+    def publish_gt_path(self):
+        gt_info = self.gt_measurements
+        # Publish the gt trajectory path to RViz
+        gt_tra_path_msg = Path()
+        gt_tra_path_msg.header.stamp = self.node.get_clock().now().to_msg()
+        gt_tra_path_msg.header.frame_id = f"{self.prefix}map"  # Set to your appropriate frame
+
+        # Create PoseStamped from ref_pos
+        gt_traj_pose = PoseStamped()
+        gt_traj_pose.header = gt_tra_path_msg.header
+        gt_traj_pose.pose.position.x = float(gt_info[0])
+        gt_traj_pose.pose.position.y = -float(gt_info[1])
+        gt_traj_pose.pose.position.z = -float(gt_info[2])
+
+        r = gt_info[3]
+        p = gt_info[4]
+        y = gt_info[5]
+
+        # Convert RPY to quaternion using SciPy
+        rotation = R.from_euler('xyz', [r, p, y], degrees=False)
+        quat = rotation.as_quat()  # SciPy returns [x, y, z, w]
+
+        # Assign quaternion to the pose orientation
+        gt_traj_pose.pose.orientation.x = quat[0]
+        gt_traj_pose.pose.orientation.y = quat[1]
+        gt_traj_pose.pose.orientation.z = quat[2]
+        gt_traj_pose.pose.orientation.w = quat[3]
+
+        # Accumulate poses
+        self.gt_traj_path_poses.append(gt_traj_pose)
+        gt_tra_path_msg.poses = self.gt_traj_path_poses
+
+        self.gt_trajectory_path_publisher.publish(gt_tra_path_msg)
+
     def orient_towards_velocity(self):
         """
         Orient the robot to face the direction of its current positive velocity.
@@ -890,10 +926,12 @@ class Robot(Base):
 
                     'gt_x', 'gt_y', 'gt_z',
                     'gt_roll', 'gt_pitch', 'gt_yaw',
+                    'base_x_ref', 'base_y_ref', 'base_z_ref', 'base_roll_ref', 'base_pitch_ref', 'base_yaw_ref',
+                    'q_alpha_axis_e_ref', 'q_alpha_axis_d_ref', 'q_alpha_axis_c_ref', 'q_alpha_axis_b_ref', 'q_alpha_axis_a_ref'
                 ]
                 self.csv_writer.writerow(columns)
 
-    def write_data_to_file(self):
+    def write_data_to_file(self, ref=[0,0,0, 0,0,0, 0,0,0,0, 0]):
         if self.record:
             row_data = []
             info = self.get_state()
@@ -911,6 +949,11 @@ class Robot(Base):
             row_data.extend(info['raw_sensor_readings'])
 
             row_data.extend(self.gt_measurements)
+
+            row_data.extend(ref)
+
+            if all(value == 0 for value in row_data):
+                return
 
             """Write a single row of data to the CSV file."""
             self.csv_writer.writerow(row_data)
