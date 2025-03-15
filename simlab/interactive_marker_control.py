@@ -274,24 +274,38 @@ class BasicControlsNode(Node):
             elif feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
                 pass
 
-        # For task_marker
-        if feedback.marker_name == "task_marker":
-            if feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
-                task_point = np.array([feedback.pose.position.x,
-                        feedback.pose.position.y,
-                        feedback.pose.position.z])
-                if self.is_point_valid(task_point):
-                    self.last_valid_task_pose = feedback.pose
-                    relative_pose = self.get_relative_pose(self.arm_base_pose, self.last_valid_task_pose)
+        elif feedback.marker_name == "task_marker" and feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
+            task_point = np.array([feedback.pose.position.x,
+                                feedback.pose.position.y,
+                                feedback.pose.position.z])
+            if self.is_point_valid(task_point):
+                self.last_valid_task_pose = feedback.pose
+                relative_pose = self.get_relative_pose(self.arm_base_pose, self.last_valid_task_pose)
+                self.q0_des, self.q1_des, self.q2_des = self.robots[self.selected_robot_index].arm.ik_solver([
+                    relative_pose.position.x, relative_pose.position.y, relative_pose.position.z
+                ])
+                self.get_logger().debug(
+                    f"Task marker updated with IK: {self.q0_des, self.q1_des, self.q2_des, self.q3_des}"
+                )
+            else:
+                # The task marker is at the boundary; compute the displacement since the last valid pose.
+                dx = feedback.pose.position.x - self.last_valid_task_pose.position.x
+                dy = feedback.pose.position.y - self.last_valid_task_pose.position.y
+                dz = feedback.pose.position.z - self.last_valid_task_pose.position.z
 
-                    self.q0_des, self.q1_des, self.q2_des = self.robots[self.selected_robot_index].arm.ik_solver([relative_pose.position.x,
-                                                                          relative_pose.position.y,
-                                                                          relative_pose.position.z])
-                    self.get_logger().debug(f"Robot taskspace ik at {self.q0_des, self.q1_des, self.q2_des, self.q3_des} selected for planning.")
+                # Shift the uv_marker by this delta so that the task marker remains at the boundary.
+                self.last_vehicle_marker_pose.position.x += dx
+                self.last_vehicle_marker_pose.position.y += dy
+                self.last_vehicle_marker_pose.position.z += dz
 
-                else:
-                    self.server.setPose(feedback.marker_name, self.last_valid_task_pose)
-                    self.server.applyChanges()
+                # Update the uv_marker pose on the server.
+                self.server.setPose("uv_marker", self.last_vehicle_marker_pose)
+                self.server.applyChanges()
+
+                # Reset the task marker back to the last valid pose (i.e. at the boundary).
+                self.server.setPose("task_marker", self.last_valid_task_pose)
+                self.server.applyChanges()
+
 
     def makeBox(self, fixed, scale, marker_type, initial_pose):
         marker = Marker()
