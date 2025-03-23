@@ -27,14 +27,6 @@ from blue_rov import Params as blue
 from alpha_reach import Params as alpha
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
 
-def quaternion_to_euler(orientation):
-    quat = [orientation.x, orientation.y, orientation.z, orientation.w]
-    r = R.from_quat(quat)
-    roll, pitch, yaw = r.as_euler('xyz', degrees=False)
-    return roll, pitch, yaw
-
-def normalize_angle(angle):
-    return (angle + math.pi) % (2 * math.pi) - math.pi
 
 class BasicControlsNode(Node):
     def __init__(self):
@@ -202,7 +194,7 @@ class BasicControlsNode(Node):
                     x_nwu = planned.position.x
                     y_nwu = planned.position.y
                     z_nwu = planned.position.z
-                    roll_nwu, pitch_nwu, yaw_nwu = quaternion_to_euler(planned.orientation)
+                    roll_nwu, pitch_nwu, yaw_nwu = robot.quaternion_to_euler(planned.orientation)
 
                     x_ned = x_nwu
                     y_ned = -y_nwu
@@ -213,13 +205,10 @@ class BasicControlsNode(Node):
                     raw_yaw_ned = -yaw_nwu
 
                     curr_roll, curr_pitch, curr_yaw = state['pose'][3:6]
-                    delta_roll = normalize_angle(raw_roll_ned - curr_roll)
-                    delta_pitch = normalize_angle(raw_pitch_ned - curr_pitch)
-                    delta_yaw = normalize_angle(raw_yaw_ned - curr_yaw)
 
-                    target_roll = curr_roll + delta_roll
-                    target_pitch = curr_pitch + delta_pitch
-                    target_yaw = curr_yaw + delta_yaw
+                    target_roll = robot.normalize_angle(raw_roll_ned, curr_roll)
+                    target_pitch = robot.normalize_angle(raw_pitch_ned, curr_pitch)
+                    target_yaw = robot.normalize_angle(raw_yaw_ned, curr_yaw)
 
                     command_msg.pose.data.extend([
                         x_ned, y_ned, z_ned,
@@ -237,10 +226,37 @@ class BasicControlsNode(Node):
                     manipulator_current_pos = np.array(state['q'])
                     manipulator_target_pos = np.array([self.q0_des, self.q1_des, self.q2_des, self.q3_des])
                     manipulator_error = np.linalg.norm(manipulator_current_pos - manipulator_target_pos)
-                    
+                                    
+                    # If both vehicle and manipulator are within tolerance, we can finish execution.
                     if vehicle_error < 0.01 and manipulator_error < 0.01:
                         self.get_logger().info("Target reached; resetting execution flag.")
                         self.execute_plan = False
+                    else:
+                        # Compute the vehicle (position) error in x, y, z only.
+                        pos_error = np.linalg.norm(np.array(state['pose'][:3]) - np.array([x_ned, y_ned, z_ned]))
+
+                        # Define a threshold error at which we start blending.
+                        pos_blend_threshold = 1.1  # Adjust based on your system's scale
+
+                        # Calculate the blend factor.
+                        # When pos_error >= pos_blend_threshold, blend_factor will be 0 (full velocity_yaw).
+                        # When pos_error == 0, blend_factor will be 1 (full target_yaw).
+                        blend_factor = np.clip((pos_blend_threshold - pos_error) / pos_blend_threshold, 0.0, 1.0)
+
+                        # Get the velocity-based yaw.
+                        velocity_yaw = robot.orient_towards_velocity()
+
+                        # If velocity_yaw is not available, simply use the target yaw.
+                        if velocity_yaw is None:
+                            final_yaw = target_yaw
+                        else:
+                            # Blend the yaw values: more weight to target_yaw as the position error decreases.
+                            final_yaw = (1 - blend_factor) * velocity_yaw + blend_factor * target_yaw
+
+                        self.get_logger().info(f"pos_error: {pos_error:.3f}, blend_factor: {blend_factor:.3f}, final_yaw: {final_yaw:.3f}")
+
+                        # Update the yaw in the command message with the blended value.
+                        command_msg.pose.data[5] = final_yaw
                 else:
                     x, y, z, r, p, y_angle = state['pose']
                     q0, q1, q2, q3 = state['q']

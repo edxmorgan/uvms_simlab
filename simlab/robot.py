@@ -510,6 +510,7 @@ class Robot(Base):
         self.arm = Manipulator(node, n_joint, prefix)
         self.ned_pose = [0] * 6
         self.body_vel = [0] * 6
+        self.ned_vel = [0] * 6
         self.sensor_reading = [0] * len(self.sensors)
         self.body_forces = [0] * 6
         self.gt_measurements = [0] * 6
@@ -541,17 +542,11 @@ class Robot(Base):
         self.ref_acc = np.zeros(10)
         self.ref_vel = np.zeros(10)
         self.ref_pos = initial_pos
-        self.ops_pos = self.map_to_workspace(self.ref_pos)
-
-        self.node.get_logger().info(f"Initial ref ops pose={self.ops_pos} ")
 
        # Initialize path poses
         self.path_poses = []
         self.traj_path_poses = []
         self.gt_traj_path_poses = []
-
-        self.path_ops_poses = []
-        self.traj_path__ops_poses = []
 
 
         self.MAX_POSES = 10000
@@ -559,8 +554,6 @@ class Robot(Base):
         # robot trajectory
         self.trajectory_twist = []
         self.trajectory_poses = []
-        self.trajectory_ops_twist = []
-        self.trajectory_ops_poses = []
 
         self.record = record
 
@@ -643,6 +636,8 @@ class Robot(Base):
                 Axis_Interface_names.floating_yaw_vel
             ]
         )
+
+        self.ned_vel = self.to_ned_velocity(self.body_vel, self.ned_pose)
         
         self.sensor_reading = self.get_interface_value(
             msg,
@@ -686,47 +681,32 @@ class Robot(Base):
         xq = self.arm.get_state()
         xq['name'] = self.prefix
         xq['pose'] = self.ned_pose
-        xq['body_vel'] =self.body_vel
+        xq['body_vel'] = self.body_vel
+        xq['ned_vel'] = self.ned_vel
         xq['body_forces'] = self.body_forces
         xq['status'] = self.status
         xq['sim_time'] = self.sim_time
         xq['prefix'] = self.prefix
         xq['raw_sensor_readings'] = self.sensor_reading
         # self.node.get_logger().info(f"body forces {xq['raw_sensor_readings']}")
-
         return xq
 
-    def map_to_workspace(self, robot_configuration):
-        self.ops_pos = self.fk_eval(robot_configuration,  self.base_To).full().flatten().tolist()
-        return self.ops_pos
-
-    def to_body_velocity(self, ned_vel):
+    def to_body_velocity(self, ned_vel, pose):
         velocity_body = copy.copy(ned_vel)
-        J_UV_REF = self.vehicle_J(self.ref_pos[3:6])
+        J_UV_REF = self.vehicle_J(pose[3:6])
         velocity_body[:6] = np.linalg.inv(J_UV_REF.full())@ned_vel[:6]
         return velocity_body
 
-    # def set_operation_space_goals(self, future_desired_body_vel, delay=True):
-    #     robot_configuration = self.get_state()['pose'] + self.get_state()['q']
-
-    #     data = np.zeros((11,))
-    #     desired_generalized_vel = self.diff_iK(future_desired_body_vel,
-    #                                 robot_configuration,
-    #                                 self.uvms_ul,
-    #                                 self.uvms_ll,
-    #                                 self.k0,
-    #                                 self.base_To
-    #                                 ).full()
-    #     data[0:10] = desired_generalized_vel.flatten()
-
-    #     self.set_robot_goals(data, delay)
+    def to_ned_velocity(self, body_vel, pose):
+        velocity_ned = copy.copy(body_vel)
+        J_UV_REF = self.vehicle_J(pose[3:6])
+        velocity_ned[:6] = J_UV_REF.full()@body_vel[:6]
+        return velocity_ned
         
-
     def set_robot_goals(self, desired_ned_vel, desired_ned_pos):
-        self.ned_vel = desired_ned_vel
-        self.ref_vel = self.to_body_velocity(desired_ned_vel)
+        self.ref_ned_vel = desired_ned_vel
+        self.ref_vel = self.to_body_velocity(desired_ned_vel, desired_ned_pos)
         self.ref_pos = desired_ned_pos
-        # self.ops_pos = self.map_to_workspace(self.ref_pos)
 
         # Accumulate reference trajectory
         self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
@@ -739,32 +719,6 @@ class Robot(Base):
 
     def get_robot_goals(self, ref_type):
         return self.goal.get(ref_type)
-
-    # def publish_ops_reference_path(self):
-    #     # Publish the reference path to RViz
-    #     path_msg = Path()
-    #     path_msg.header.stamp = self.node.get_clock().now().to_msg()
-    #     path_msg.header.frame_id = f"{self.prefix}map"  # Set to robot map frame
-
-    #     # Create PoseStamped from ref_pos
-    #     pose = PoseStamped()
-    #     pose.header = path_msg.header
-    #     pose.pose.position.x = float(self.ops_pos[0])
-    #     pose.pose.position.y = float(self.ops_pos[1])
-    #     pose.pose.position.z = float(self.ops_pos[2])
-    #     pose.pose.orientation.w = 1.0  # No rotation
-    #     pose.pose.orientation.x = 0.0  # No rotation
-    #     pose.pose.orientation.y = 0.0  # No rotation
-    #     pose.pose.orientation.z = 0.0  # No rotation
-        
-    #     # Accumulate poses
-    #     self.path_ops_poses.append(pose)
-    #     path_msg.poses = self.path_ops_poses
-
-    #     # Limit the number of poses
-    #     if len(self.path_ops_poses) > self.MAX_POSES:
-    #         self.path_ops_poses.pop(0)
-    #     self.path_ops_publisher.publish(path_msg)
 
     def publish_reference_path(self):
         # Publish the reference path to RViz
@@ -864,30 +818,31 @@ class Robot(Base):
             desired_yaw = np.arctan2(vy, vx)
 
             # -- Get the CURRENT yaw from the last pose in trajectory_poses
-            if len(self.trajectory_poses)>1:
-                current_yaw = self.trajectory_poses[-2][5]
-            else:
-                current_yaw = self.trajectory_poses[-1][5]
+            current_yaw = self.ned_pose[5]
             # -- Compute the shortest-path yaw
-            adjusted_yaw = self.adjust_desired_yaw(desired_yaw, current_yaw)
+            adjusted_yaw = self.normalize_angle(desired_yaw, current_yaw)
 
-            self.trajectory_poses[-1][5] = adjusted_yaw
+            return adjusted_yaw
 
             # self.node.get_logger().info(f"Orienting towards velocity:current yaw={current_yaw} radians  desired yaw={desired_yaw} radians adjusted yaw={adjusted_yaw} radians")
 
 
-    def adjust_desired_yaw(self, desired_yaw, current_yaw):
-            # Compute the smallest angular difference
+    def normalize_angle(self, desired_yaw, current_yaw):
+        # Compute the smallest angular difference
         angle_diff = desired_yaw - current_yaw
         angle_diff = (angle_diff + np.pi) % (2 * np.pi) - np.pi  # Normalize to (-π, π)
 
         # Adjust desired_yaw to ensure the shortest rotation path
         adjusted_desired_yaw = current_yaw + angle_diff
 
-        # # Normalize the adjusted desired yaw to [0, 2π)
-        # adjusted_desired_yaw = adjusted_desired_yaw % (2 * np.pi)
-
         return adjusted_desired_yaw
+
+    def quaternion_to_euler(self, orientation):
+        quat = [orientation.x, orientation.y, orientation.z, orientation.w]
+        r = R.from_quat(quat)
+        roll, pitch, yaw = r.as_euler('xyz', degrees=False)
+        return roll, pitch, yaw
+
 
     def initiaize_data_writer(self):
             if self.record:
