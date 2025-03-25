@@ -347,9 +347,9 @@ class Manipulator(Base):
         self.l1 = self.a1
         self.l2 = np.sqrt(self.a2**2 + self.d3**2)
 
-        self.task_Space_Box ={'x_min': -0.05772180470827806, 'x_max': 0.03015406093747365,
-                          'y_min': -0.06853860224338981, 'y_max': 0.057466988088834825,
-                            'z_min': -0.2216507997959984, 'z_max': 0.3100041333006747}
+        self.q_command = [3.1, 0.7, 0.4, 2.1, 0.0]
+        self.dq_command = [0.0, 0.0, 0.0, 0.0, 0.0]
+        self.ddq_command = [0.0, 0.0, 0.0, 0.0, 0.0]
 
     def generate_random_point(self):
         x = random.uniform(self.task_Space_Box['x_min'], self.task_Space_Box['x_max'])
@@ -520,6 +520,9 @@ class Robot(Base):
         self.start_time = 0.0
 
         self.use_controller = controller
+        self.pose_command = [0.0]*6
+        self.body_vel_command = [0.0]*6
+        self.body_acc_command = [0.0]*6
 
  
         self.uvms_ll = [-1000, -1000, 0.0, -np.pi/6, -np.pi/6, -1000, 1, 0.01, 0.01, 0.01]

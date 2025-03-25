@@ -127,7 +127,7 @@ class BasicControlsNode(Node):
 
         # Unpack the Euler angles from the returned array.
         roll, pitch, yaw = R.from_quat(desired_q_orientation).as_euler('xyz', degrees=False)
-        self.q0_des, self.q1_des, self.q2_des, self.q3_des = 3.1, 0.7, 0.4, 2.1
+        [self.q0_des, self.q1_des, self.q2_des, self.q3_des, self.q4_des] = self.robots[0].arm.q_command
         self.n_int_est = ca.DM([self.last_vehicle_marker_pose.position.x,
                       self.last_vehicle_marker_pose.position.y,
                       self.last_vehicle_marker_pose.position.z,
@@ -185,8 +185,8 @@ class BasicControlsNode(Node):
         for k, robot in enumerate(self.robots):
             state = robot.get_state()
             if state['status'] == 'active':
-                command_msg.acceleration.data.extend([0.0]*self.no_efforts)
-                command_msg.twist.data.extend([0.0]*self.no_efforts)
+                command_msg.acceleration.data.extend(robot.body_acc_command + robot.arm.ddq_command)
+                command_msg.twist.data.extend(robot.body_vel_command + robot.arm.dq_command)
                 robot.publish_robot_path()
 
                 if self.execute_plan and (k == self.selected_robot_index) and (self.last_vehicle_marker_pose is not None):
@@ -210,13 +210,10 @@ class BasicControlsNode(Node):
                     target_pitch = robot.normalize_angle(raw_pitch_ned, curr_pitch)
                     target_yaw = robot.normalize_angle(raw_yaw_ned, curr_yaw)
 
-                    command_msg.pose.data.extend([
-                        x_ned, y_ned, z_ned,
-                        target_roll, target_pitch, target_yaw,
-                        self.q0_des, self.q1_des, self.q2_des, self.q3_des,
-                        0.0
-                    ])
+                    robot.pose_command = [x_ned, y_ned, z_ned,target_roll, target_pitch, target_yaw]
+                    robot.arm.q_command = [self.q0_des, self.q1_des, self.q2_des, self.q3_des, self.q4_des]
 
+                    command_msg.pose.data.extend(robot.pose_command + robot.arm.q_command)
 
                     vehicle_current_pos = np.array(state['pose'])
                     vehicle_target_pos = np.array([x_ned, y_ned, z_ned, target_roll, target_pitch,
@@ -253,14 +250,15 @@ class BasicControlsNode(Node):
                             # Blend the yaw values: more weight to target_yaw as the position error decreases.
                             final_yaw = (1 - blend_factor) * velocity_yaw + blend_factor * target_yaw
 
-                        self.get_logger().info(f"pos_error: {pos_error:.3f}, blend_factor: {blend_factor:.3f}, final_yaw: {final_yaw:.3f}")
+                        self.get_logger().debug(f"pos_error: {pos_error:.3f}, blend_factor: {blend_factor:.3f}, final_yaw: {final_yaw:.3f}")
 
                         # Update the yaw in the command message with the blended value.
                         command_msg.pose.data[5] = final_yaw
                 else:
-                    x, y, z, r, p, y_angle = state['pose']
-                    q0, q1, q2, q3 = state['q']
-                    command_msg.pose.data.extend([x, y, z, r, p, y_angle, q0, q1, q2, q3, 0.0])
+                    robot.pose_command = state['pose']
+                    robot.arm.q_command = state['q'] + [0.0]
+                    command_msg.pose.data.extend(robot.pose_command + robot.arm.q_command)
+                
 
         self.uvms_publisher_.publish(command_msg)
 
