@@ -351,12 +351,6 @@ class Manipulator(Base):
         self.dq_command = [0.0, 0.0, 0.0, 0.0, 0.0]
         self.ddq_command = [0.0, 0.0, 0.0, 0.0, 0.0]
 
-    def generate_random_point(self):
-        x = random.uniform(self.task_Space_Box['x_min'], self.task_Space_Box['x_max'])
-        y = random.uniform(self.task_Space_Box['y_min'], self.task_Space_Box['y_max'])
-        z = random.uniform(self.task_Space_Box['z_min'], self.task_Space_Box['z_max'])
-        return (x, y, z)
-
 
     def update_state(self, msg: DynamicJointState):
         self.q = self.get_interface_value(
@@ -574,6 +568,49 @@ class Robot(Base):
             self.has_joystick_interface = True
         else:
             self.node.get_logger().info(f"No joystick device found for robot {self.k_robot}.")
+
+    def set_robot_command_status(self):
+        state = self.get_state()
+        execute_plan = True
+        vehicle_current_pos = np.array(state['pose'])
+        vehicle_target_pos = np.array(self.pose_command)
+        vehicle_error = np.linalg.norm(vehicle_current_pos - vehicle_target_pos)
+        
+        manipulator_current_pos = np.array(state['q'])
+        manipulator_target_pos = np.array(self.arm.q_command[0:4])
+        manipulator_error = np.linalg.norm(manipulator_current_pos - manipulator_target_pos)
+                        
+        # If both vehicle and manipulator are within tolerance, we can finish execution.
+        if vehicle_error < 0.01 and manipulator_error < 0.01:
+            self.node.get_logger().info("Target reached; resetting execution flag.")
+            execute_plan = False
+        else:
+            # Compute the vehicle (position) error in x, y, z only.
+            pos_error = np.linalg.norm(np.array(state['pose'][:3]) - np.array(self.pose_command[0:3]))
+
+            # Define a threshold error at which we start blending.
+            pos_blend_threshold = 1.1  # Adjust based on your system's scale
+
+            # Calculate the blend factor.
+            # When pos_error >= pos_blend_threshold, blend_factor will be 0 (full velocity_yaw).
+            # When pos_error == 0, blend_factor will be 1 (full target_yaw).
+            blend_factor = np.clip((pos_blend_threshold - pos_error) / pos_blend_threshold, 0.0, 1.0)
+
+            # Get the velocity-based yaw.
+            velocity_yaw = self.orient_towards_velocity()
+
+            # If velocity_yaw is not available, simply use the target yaw.
+            if velocity_yaw is None:
+                final_yaw = self.pose_command[5]
+            else:
+                # Blend the yaw values: more weight to target_yaw as the position error decreases.
+                final_yaw = (1 - blend_factor) * velocity_yaw + blend_factor * self.pose_command[5]
+
+            self.node.get_logger().debug(f"pos_error: {pos_error:.3f}, blend_factor: {blend_factor:.3f}, final_yaw: {final_yaw:.3f}")
+
+            # Update the yaw in the command message with the blended value.
+            self.pose_command[5] = final_yaw
+        return execute_plan
 
 
     def start_joystick(self, device_interface):
