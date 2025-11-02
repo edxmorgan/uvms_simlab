@@ -9,7 +9,6 @@ from ament_index_python.packages import get_package_share_directory
 
 from mesh_utils import collect_env_meshes, conc_env_trimesh
 
-
 class VoxelVizNode(Node):
     def __init__(self):
         super().__init__("voxel_viz_node")
@@ -124,7 +123,7 @@ class VoxelVizNode(Node):
 
         centers = v.points.copy()
         return centers, voxel_size
-
+    
 def main():
     rclpy.init()
     node = VoxelVizNode()
