@@ -3,7 +3,8 @@ import os
 import numpy as np
 import rclpy
 from rclpy.node import Node
-
+from nav_msgs.msg import OccupancyGrid
+import pyoctomap
 import trimesh
 from ament_index_python.packages import get_package_share_directory
 
@@ -49,7 +50,7 @@ class VoxelVizNode(Node):
             f"env voxel grid ready, {self.centers.shape[0]} occupied voxels at "
             f"{self.voxel_size} m"
         )
-
+        self.occupancy_pub = self.create_publisher(OccupancyGrid,'/octomap/occupancy_grid',10)
         # timer for future publishing of octomap_full
         self.timer = self.create_timer(0.05, self.tick)
 
