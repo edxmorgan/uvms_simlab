@@ -51,7 +51,7 @@ class CollisionNode(Node):
         clear.action = Marker.DELETEALL
         self.contact_pub.publish(clear)
 
-        req  = fcl.CollisionRequest(num_max_contacts=200, enable_contact=True)
+        req  = fcl.CollisionRequest(num_max_contacts=100, enable_contact=True)
         dreq = fcl.DistanceRequest(enable_nearest_points=True)
 
         marker_id_counter = 0

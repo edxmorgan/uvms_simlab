@@ -4,26 +4,34 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid
+from sensor_msgs.msg import PointCloud2
+
 import pyoctomap
 import trimesh
 from ament_index_python.packages import get_package_share_directory
-
-from mesh_utils import collect_env_meshes, conc_env_trimesh
+from mesh_utils import collect_env_meshes, conc_env_trimesh, points_to_cloud2, _parse_urdf_no_ros2_control
 
 class VoxelVizNode(Node):
     def __init__(self):
         super().__init__("voxel_viz_node")
         self.declare_parameter('robot_description', '')
 
-        urdf_string = self.get_parameter('robot_description').get_parameter_value().string_value
+        urdf_string = self.get_parameter(
+            'robot_description'
+        ).get_parameter_value().string_value
+
         if not urdf_string:
-            self.get_logger().error('robot_description param is empty. Did you load it into the param server in launch')
+            self.get_logger().error(
+                'robot_description param is empty. Did you load it into the param server in launch'
+            )
             raise RuntimeError('no robot_description')
 
         # collect meshes
         robot_mesh_infos, env_mesh_infos = collect_env_meshes(urdf_string)
         if len(env_mesh_infos) == 0:
-            self.get_logger().warn("No env meshes with prefix bathymetry_ found")
+            self.get_logger().warn(
+                "No env meshes with prefix bathymetry_ found"
+            )
         else:
             self.get_logger().info(
                 f"env links {[x['link'] for x in env_mesh_infos]}"
@@ -50,17 +58,31 @@ class VoxelVizNode(Node):
             f"env voxel grid ready, {self.centers.shape[0]} occupied voxels at "
             f"{self.voxel_size} m"
         )
-        self.occupancy_pub = self.create_publisher(OccupancyGrid,'/octomap/occupancy_grid',10)
-        # timer for future publishing of octomap_full
-        self.timer = self.create_timer(0.05, self.tick)
 
+        self.cloud_pub = self.create_publisher(
+            PointCloud2,
+            '/env_voxels_cloud',
+            10
+        )
+
+        # timer
+        self.timer = self.create_timer(0.1, self.tick)
 
     def tick(self):
-        # next step is to convert self.centers to octomap and publish
-        self.get_logger().info(
-            f"tick, {self.centers.shape[0]} voxels cached in ros2_control_blue_reach_5 share, "
-            "octomap publish TODO"
-        )
+        """
+        Periodic publish.
+        1. Publish point cloud of voxel centers to RViz for geometric sanity check.
+        2. Placeholder for OccupancyGrid projection from octree later.
+        """
+        # Publish voxel centers as PointCloud2
+        if self.centers is not None and self.centers.shape[0] > 0:
+            cloud_msg = points_to_cloud2(
+                self.centers,
+                frame_id="world_bottom",
+                stamp=self.get_clock().now().to_msg()
+            )
+            self.cloud_pub.publish(cloud_msg)
+
 
     def get_cache_path(self, voxel_size: float):
         pkg_share = get_package_share_directory('ros2_control_blue_reach_5')
@@ -124,12 +146,14 @@ class VoxelVizNode(Node):
 
         centers = v.points.copy()
         return centers, voxel_size
-    
+
+
 def main():
     rclpy.init()
     node = VoxelVizNode()
     rclpy.spin(node)
     rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()
