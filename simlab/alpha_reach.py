@@ -32,7 +32,7 @@ class Params:
     u_min = np.array([-1.5, -1, -1, -0.54])
     u_max = np.array([1.5, 1, 1, 0.54])
     
-    Kp = cs.vertcat(8.0, 8.0, 8.0, 8.0)
+    Kp = cs.vertcat(5.0, 5.0, 5.0, 5.0)
     Ki = cs.vertcat(0.0, 0.0, 0.0, 0.0)
     Kd = cs.vertcat(0.0, 0.0, 0.0, 0.0)
 

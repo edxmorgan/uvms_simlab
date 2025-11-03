@@ -118,8 +118,8 @@ class CollisionNode(Node):
             sphere.lifetime.nanosec = int(0.1 * 1e9)
             self.contact_pub.publish(sphere)
 
-        for pair_key in pair_to_point.keys():
-            self.get_logger().warn(f'Collision {pair_key[0]} <-> {pair_key[1]}')
+        # for pair_key in pair_to_point.keys():
+        #     self.get_logger().warn(f'Collision {pair_key[0]} <-> {pair_key[1]}')
 
 
     def build_fcl_bodies(self, link_list, kind):
