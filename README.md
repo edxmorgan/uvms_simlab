@@ -19,6 +19,8 @@ The **uvms_simlab** project is an extension of the [uvms-simulator](https://gith
 - **Real Hardware & Simulation Support:**  
   The project is designed to work in both simulated environments and on actual hardware, offering flexibility in testing and deployment.
 
+- **Broad-Phase Collision Detection:**  
+
 ---
 
 ### Dependencies
