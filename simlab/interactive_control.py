@@ -239,8 +239,6 @@ class BasicControlsNode(Node):
                         wp_size=0.08,
                         goal_size=0.14,
                     )
-            # else:
-            #     k_planner.clear(stamp_now, self.base_frame)
 
             state = robot.get_state()
             if state['status'] == 'active':
@@ -249,6 +247,9 @@ class BasicControlsNode(Node):
                 robot.publish_robot_path()
 
                 if robot.final_goal is not None:
+                    # k_planner.planned_result["xyz"][i]
+                    # k_planner.planned_result["quat_wxyz"][i]
+
                     x_nwu = robot.final_goal.position.x
                     y_nwu = robot.final_goal.position.y
                     z_nwu = robot.final_goal.position.z
@@ -272,6 +273,8 @@ class BasicControlsNode(Node):
                     robot.arm.q_command = [self.q0_des, self.q1_des, self.q2_des, self.q3_des]
 
                     # robot.apply_surge_yaw_axis_align()
+                    err_se3_trans, err_se3_rotation, err_s1= robot.compute_manifold_errors()
+                    # self.get_logger().info(f"{err_se3_trans}, {err_se3_rotation}, {err_s1}")
                 else:
                     robot.pose_command = state['pose']
                     robot.arm.q_command = state['q']

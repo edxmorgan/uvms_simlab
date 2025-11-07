@@ -4,10 +4,6 @@ import numpy as np
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 
-from rclpy.qos import (
-    QoSProfile, QoSHistoryPolicy, QoSDurabilityPolicy, QoSReliabilityPolicy
-)
-
 @dataclass
 class Colors:
     wp  : tuple = (0.1, 0.6, 0.95, 1.0)

@@ -39,7 +39,7 @@ from estimate import SerialLinksDynamicEstimator
 from estimate import MarineVehicleEstimator
 from estimate import EWUncertainty, EWErrorMetrics
 from controllers import LowLevelController
-
+from liecasadi import SE3, SE3Tangent, S1, S1Tangent
 from collections import deque
 
 class Ring:
@@ -842,6 +842,34 @@ class Robot(Base):
         self.mocap_latest = [float(p.x), float(p.y), float(p.z),
                             float(q.w), float(q.x), float(q.y), float(q.z)]
 
+
+    def compute_manifold_errors(self):
+        st = self.get_state()
+
+        # vehicle part
+        x_curr = np.asarray(st["pose"], dtype=float)
+        x_des  = np.asarray(self.pose_command, dtype=float)
+
+        def rpy_to_xyzw(rpy):
+            return R.from_euler("xyz", rpy, degrees=False).as_quat()
+
+        X_curr = SE3(pos=x_curr[:3], xyzw=rpy_to_xyzw(x_curr[3:6]))
+        X_des  = SE3(pos=x_des[:3],  xyzw=rpy_to_xyzw(x_des[3:6]))
+        err_se3 = (X_des - X_curr).exp()
+        err_se3_trans = np.abs(err_se3.translation()).flatten().tolist()
+        err_se3_rotation = np.abs(err_se3.rotation().as_euler()).flatten().tolist()
+
+
+        # manipulator part, build S1 objects, subtract per joint, then extract scalar tangent
+        q_curr = np.asarray(st["q"], dtype=float)
+        q_des  = np.asarray(self.arm.q_command, dtype=float)
+
+        X_m_curr = [S1(float(qc)) for qc in q_curr]
+        X_m_des  = [S1(float(qd)) for qd in q_des]
+
+        err_s1 = [np.abs((Xd - Xc).exp().angle) for Xd, Xc in zip(X_m_des, X_m_curr)]  # list of S1Tangent
+
+        return err_se3_trans, err_se3_rotation, err_s1
 
     def apply_surge_yaw_axis_align(self):
         state = self.get_state()
