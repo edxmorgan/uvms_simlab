@@ -613,6 +613,9 @@ class Robot(Base):
                   initial_ref_pos, 
                   record=False,  
                   controller='pid'):
+        self.planner = None
+        self.menu_handle = None
+        self.final_goal = None
         self.subscription = node.create_subscription(
                 DynamicJointState,
                 'dynamic_joint_states',
@@ -840,48 +843,33 @@ class Robot(Base):
                             float(q.w), float(q.x), float(q.y), float(q.z)]
 
 
-    def set_robot_command_status(self):
+    def apply_surge_yaw_axis_align(self):
         state = self.get_state()
-        execute_plan = True
-        vehicle_current_pos = np.array(state['pose'])
-        vehicle_target_pos = np.array(self.pose_command)
-        vehicle_error = np.linalg.norm(vehicle_current_pos - vehicle_target_pos)
-        
-        manipulator_current_pos = np.array(state['q'])
-        manipulator_target_pos = np.array(self.arm.q_command)
-        manipulator_error = np.linalg.norm(manipulator_current_pos - manipulator_target_pos)
-                        
-        # If both vehicle and manipulator are within tolerance, we can finish execution.
-        if vehicle_error < 0.01 and manipulator_error < 0.01:
-            self.node.get_logger().info("Target reached; resetting execution flag.")
-            execute_plan = False
+        # Compute the vehicle (position) error in x, y, z only.
+        pos_error = np.linalg.norm(np.array(state['pose'][:3]) - np.array(self.pose_command[0:3]))
+
+        # Define a threshold error at which we start blending.
+        pos_blend_threshold = 1.1  # Adjust based on your system's scale
+
+        # Calculate the blend factor.
+        # When pos_error >= pos_blend_threshold, blend_factor will be 0 (full velocity_yaw).
+        # When pos_error == 0, blend_factor will be 1 (full target_yaw).
+        blend_factor = np.clip((pos_blend_threshold - pos_error) / pos_blend_threshold, 0.0, 1.0)
+
+        # Get the velocity-based yaw.
+        self.velocity_yaw = self.orient_towards_velocity()
+
+        # If velocity_yaw is not available, simply use the target yaw.
+        if self.velocity_yaw is None:
+            final_yaw = self.pose_command[5]
         else:
-            # Compute the vehicle (position) error in x, y, z only.
-            pos_error = np.linalg.norm(np.array(state['pose'][:3]) - np.array(self.pose_command[0:3]))
+            # Blend the yaw values: more weight to target_yaw as the position error decreases.
+            final_yaw = (1 - blend_factor) * self.velocity_yaw + blend_factor * self.pose_command[5]
 
-            # Define a threshold error at which we start blending.
-            pos_blend_threshold = 1.1  # Adjust based on your system's scale
+        self.node.get_logger().debug(f"pos_error: {pos_error:.3f}, blend_factor: {blend_factor:.3f}, final_yaw: {final_yaw:.3f}")
 
-            # Calculate the blend factor.
-            # When pos_error >= pos_blend_threshold, blend_factor will be 0 (full velocity_yaw).
-            # When pos_error == 0, blend_factor will be 1 (full target_yaw).
-            blend_factor = np.clip((pos_blend_threshold - pos_error) / pos_blend_threshold, 0.0, 1.0)
-
-            # Get the velocity-based yaw.
-            self.velocity_yaw = self.orient_towards_velocity()
-
-            # If velocity_yaw is not available, simply use the target yaw.
-            if self.velocity_yaw is None:
-                final_yaw = self.pose_command[5]
-            else:
-                # Blend the yaw values: more weight to target_yaw as the position error decreases.
-                final_yaw = (1 - blend_factor) * self.velocity_yaw + blend_factor * self.pose_command[5]
-
-            self.node.get_logger().debug(f"pos_error: {pos_error:.3f}, blend_factor: {blend_factor:.3f}, final_yaw: {final_yaw:.3f}")
-
-            # Update the yaw in the command message with the blended value.
-            self.pose_command[5] = final_yaw
-        return execute_plan
+        # Update the yaw in the command message with the blended value.
+        self.pose_command[5] = final_yaw
 
 
     def start_joystick(self, device_interface):

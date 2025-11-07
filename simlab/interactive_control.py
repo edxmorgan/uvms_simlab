@@ -20,16 +20,15 @@ np.float = float  # Patch NumPy to satisfy tf_transformations' use of np.float
 import copy
 import rclpy
 from rclpy.node import Node
-from scipy.spatial.transform import Rotation as R
+
 import casadi as ca
 from geometry_msgs.msg import Pose
-from visualization_msgs.msg import Marker, InteractiveMarker, InteractiveMarkerControl, InteractiveMarkerFeedback
+from visualization_msgs.msg import Marker, InteractiveMarkerControl, InteractiveMarkerFeedback
 from interactive_markers.interactive_marker_server import InteractiveMarkerServer
 from interactive_markers.menu_handler import MenuHandler
 from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSDurabilityPolicy, QoSReliabilityPolicy
 from robot import Robot
 import tf2_ros
-from geometry_msgs.msg import TransformStamped
 import ament_index_python
 import os
 from sensor_msgs.msg import PointCloud2
@@ -37,14 +36,20 @@ from std_msgs.msg import Header
 import sensor_msgs_py.point_cloud2 as pc2
 from scipy.spatial import ConvexHull
 from alpha_reach import Params as alpha
-from tf_transformations import quaternion_matrix, quaternion_from_matrix
-
+from se3_ompl_planner import plan_se3_path
+from fcl_checker import FCLWorld
+from interactive_utils import *
+from planner_markers import PathPlanner
 
 class BasicControlsNode(Node):
     def __init__(self):
         super().__init__('uvms_interactive_controls',
                          automatically_declare_parameters_from_overrides=True)
-        
+
+        # FCL for planning, env in world frame
+        urdf_string = self.get_parameter('robot_description').get_parameter_value().string_value
+        self.fcl_world = FCLWorld(urdf_string=urdf_string, world_frame='world', vehicle_radius=0.4)
+
         package_share_directory = ament_index_python.get_package_share_directory('simlab')
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.tf_buffer = tf2_ros.Buffer()
@@ -58,8 +63,15 @@ class BasicControlsNode(Node):
         self.controllers = self.get_parameter('controllers').value
         self.total_no_efforts = self.no_robot * self.no_efforts
 
-        
-        qos_profile = QoSProfile(history=QoSHistoryPolicy.KEEP_LAST, depth=10)
+        viz_qos = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST,
+                depth=1,
+                durability=QoSDurabilityPolicy.VOLATILE,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+    
+        )
+        self.planner_marker_publisher = self.create_publisher(Marker, "planned_waypoints_marker", viz_qos)
+
         pointcloud_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
@@ -75,25 +87,26 @@ class BasicControlsNode(Node):
         self.workspace_hull = ConvexHull(self.workspace_pts)
 
         self.workspace_pts_list = self.workspace_pts.tolist()
-        self.rov_ellipsoid_cl_pts = self.generate_rov_ellipsoid(a=0.3, b=0.3, c=0.2, num_points=10000)
+        self.rov_ellipsoid_cl_pts = generate_rov_ellipsoid(a=0.3, b=0.3, c=0.2, num_points=10000)
         self.vehicle_body_hull = ConvexHull(self.rov_ellipsoid_cl_pts)
 
+        # Combine clouds that represent the vehicle occupied volume
+        # Use what you already have in this node
+        all_pts = np.vstack([
+            np.asarray(self.rov_ellipsoid_cl_pts, dtype=float),
+            np.asarray(self.workspace_pts, dtype=float)
+        ])
+
+        planner_radius = compute_bounding_sphere_radius(all_pts, quantile=0.995, pad=0.03)
+        self.get_logger().info(f"Planner robot approximation sphere radius set to {planner_radius:.3f} m")
+        self.fcl_world.set_planner_radius(planner_radius)
+        
         frequency = 500  # Hz
-        self.timer = self.create_timer(1.0 / frequency, self.timer_callback)
+        self.timer = self.create_timer(1.0 / frequency, self.timer_callback)        
 
-
-        initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
-        self.robots = []
-        # Create a publisher for the commands.
-        for k, (prefix, controller) in enumerate(list(zip(self.robots_prefix, self.controllers))):
-            robot_k = Robot(self, k, 4, prefix, initial_pos, self.record, controller)
-            self.robots.append(robot_k)
-            
-
-        self.last_vehicle_marker_pose = Pose()
-        self.last_vehicle_marker_pose.orientation.w = 1.0
+        self.current_target_vehicle_marker_pose = Pose()
+        self.current_target_vehicle_marker_pose.orientation.w = 1.0
         self.selected_robot_index = 0 # by default robot 0 is selected
-        self.execute_plan = False
 
         self.arm_base_pose = Pose()
         self.arm_base_pose.position.x = 0.19
@@ -108,26 +121,42 @@ class BasicControlsNode(Node):
 
         # Create marker server, menu handler
         self.server = InteractiveMarkerServer(self, "uvms_interactive_controls")
+
         self.menu_handler = MenuHandler()
-        self.menu_handler.insert("execute", callback=self.processFeedback)
+        self.menu_id_to_robot_index = {}
+
+        self.execute_handle = self.menu_handler.insert("Plan & execute", callback=self.processFeedback)
         sub_menu_handle = self.menu_handler.insert("Robots")
-        for prefix in self.robots_prefix:
-            self.menu_handler.insert(f"{prefix} plan", parent=sub_menu_handle, callback=self.processFeedback)
+
+        initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
+        self.robots = []
+        for k, (prefix, controller) in enumerate(zip(self.robots_prefix, self.controllers)):
+            robot_k = Robot(self, k, 4, prefix, initial_pos, self.record, controller)
+
+            # unique planner per robot
+            robot_k.planner = PathPlanner(self, ns=f"planner/{prefix}", base_id=k)
+
+            # add a menu item for this robot and remember which handle maps to which index
+            h = self.menu_handler.insert(f"Use {prefix}", parent=sub_menu_handle, callback=self.processFeedback)
+            self.menu_id_to_robot_index[h] = k
+
+            self.robots.append(robot_k)
 
         self.base_frame = "base_link"
         self.vehicle_marker_frame = "vehicle_marker_frame"
         self.endeffector_marker_frame = "endeffector_marker_frame"
 
         # Create markers
-        self.uv_marker = self.make_UVMS_Dof_Marker(
+        self.uv_marker = make_UVMS_Dof_Marker(
             name='uv_marker',
             description='interactive marker for controlling vehicle',
             frame_id=self.base_frame,
-            robot='uv',
+            control_frame='uv',
             fixed=False,
             interaction_mode=InteractiveMarkerControl.MOVE_ROTATE_3D,
-            initial_pose=self.last_vehicle_marker_pose,
+            initial_pose=self.current_target_vehicle_marker_pose,
             scale=1.0,
+            arm_base_pose=self.arm_base_pose,
             show_6dof=True,
             ignore_dof=['roll','pitch']
         )
@@ -136,18 +165,18 @@ class BasicControlsNode(Node):
         self.server.setCallback(self.uv_marker.name, self.processFeedback)
 
         desired_q_orientation = [
-                self.last_vehicle_marker_pose.orientation.x,
-                self.last_vehicle_marker_pose.orientation.y,
-                self.last_vehicle_marker_pose.orientation.z,
-                self.last_vehicle_marker_pose.orientation.w
+                self.current_target_vehicle_marker_pose.orientation.x,
+                self.current_target_vehicle_marker_pose.orientation.y,
+                self.current_target_vehicle_marker_pose.orientation.z,
+                self.current_target_vehicle_marker_pose.orientation.w
             ]
 
         # Unpack the Euler angles from the returned array.
         roll, pitch, yaw = R.from_quat(desired_q_orientation).as_euler('xyz', degrees=False)
         [self.q0_des, self.q1_des, self.q2_des, self.q3_des] = self.robots[0].arm.q_command
-        self.n_int_est = ca.DM([self.last_vehicle_marker_pose.position.x,
-                      self.last_vehicle_marker_pose.position.y,
-                      self.last_vehicle_marker_pose.position.z,
+        self.n_int_est = ca.DM([self.current_target_vehicle_marker_pose.position.x,
+                      self.current_target_vehicle_marker_pose.position.y,
+                      self.current_target_vehicle_marker_pose.position.z,
                       roll,
                       pitch,
                       yaw,
@@ -156,17 +185,18 @@ class BasicControlsNode(Node):
                       self.q2_des, 
                       self.q3_des])
         temp_dm = Robot.uvms_Forward_kinematics(self.n_int_est, alpha.base_T0)
-        self.last_valid_task_pose = self.dm_to_pose(temp_dm[4])
+        self.last_valid_task_pose = dm_to_pose(temp_dm[4])
 
-        self.task_marker = self.make_UVMS_Dof_Marker(
+        self.task_marker = make_UVMS_Dof_Marker(
             name='task_marker',
             description='interactive marker for controlling endeffector',
             frame_id=self.vehicle_marker_frame,
-            robot='task',
+            control_frame='task',
             fixed=False,
             interaction_mode=InteractiveMarkerControl.MOVE_ROTATE_3D,
             initial_pose=self.last_valid_task_pose,
             scale=0.2,
+            arm_base_pose=self.arm_base_pose,
             show_6dof=True,
             ignore_dof=['yaw']
         )
@@ -175,18 +205,20 @@ class BasicControlsNode(Node):
         self.server.setCallback(self.task_marker.name, self.processFeedback)
 
         # Add menu control
-        menu_control = self.make_menu_control()
+        menu_control = make_menu_control()
         self.uv_marker.controls.append(copy.deepcopy(menu_control))
         self.menu_handler.apply(self.server, self.uv_marker.name)
-
         self.server.applyChanges()
+
         self.header = Header()
         self.header.frame_id = self.vehicle_marker_frame
+
 
     def timer_callback(self):
         stamp_now = self.get_clock().now().to_msg()
 
-        self.broadcast_pose(stamp_now, self.last_vehicle_marker_pose, self.base_frame, self.vehicle_marker_frame)
+        t = get_broadcast_tf(stamp_now, self.current_target_vehicle_marker_pose, self.base_frame, self.vehicle_marker_frame)
+        self.tf_broadcaster.sendTransform(t)
         
         self.header.stamp = stamp_now
         rov_cloud_msg = pc2.create_cloud_xyz32(self.header, self.workspace_pts_list)
@@ -196,18 +228,31 @@ class BasicControlsNode(Node):
         self.rov_pc_publisher_.publish(cloud_msg)
 
         for k, robot in enumerate(self.robots):
+            k_planner = robot.planner
+            if robot.prefix == self.robots_prefix[self.selected_robot_index]:
+                if k_planner.planned_result != None:
+                    k_planner.update(
+                        stamp=stamp_now,
+                        frame_id=self.base_frame,
+                        xyz_np=k_planner.planned_result["xyz"],
+                        step=3,
+                        wp_size=0.08,
+                        goal_size=0.14,
+                    )
+            # else:
+            #     k_planner.clear(stamp_now, self.base_frame)
+
             state = robot.get_state()
             if state['status'] == 'active':
                 desired_body_acc = robot.body_acc_command + robot.arm.ddq_command
                 desired_body_vel = robot.body_vel_command + robot.arm.dq_command
                 robot.publish_robot_path()
 
-                if self.execute_plan and (k == self.selected_robot_index) and (self.last_vehicle_marker_pose is not None):
-                    planned = self.last_vehicle_marker_pose
-                    x_nwu = planned.position.x
-                    y_nwu = planned.position.y
-                    z_nwu = planned.position.z
-                    roll_nwu, pitch_nwu, yaw_nwu = robot.quaternion_to_euler(planned.orientation)
+                if robot.final_goal is not None:
+                    x_nwu = robot.final_goal.position.x
+                    y_nwu = robot.final_goal.position.y
+                    z_nwu = robot.final_goal.position.z
+                    roll_nwu, pitch_nwu, yaw_nwu = robot.quaternion_to_euler(robot.final_goal.orientation)
 
                     x_ned = x_nwu
                     y_ned = -y_nwu
@@ -226,7 +271,7 @@ class BasicControlsNode(Node):
                     robot.pose_command = [x_ned, y_ned, z_ned,target_roll, target_pitch, target_yaw]
                     robot.arm.q_command = [self.q0_des, self.q1_des, self.q2_des, self.q3_des]
 
-                    self.execute_plan = robot.set_robot_command_status()
+                    # robot.apply_surge_yaw_axis_align()
                 else:
                     robot.pose_command = state['pose']
                     robot.arm.q_command = state['q']
@@ -274,25 +319,86 @@ class BasicControlsNode(Node):
         # For uv_marker
         if feedback.marker_name == "uv_marker":
             if feedback.pose:
-                self.last_vehicle_marker_pose = feedback.pose
                 if feedback.pose.position.z > 0.0:
                     feedback.pose.position.z = 0.0
                     self.server.setPose(feedback.marker_name, feedback.pose)
                     self.server.applyChanges()
+                self.current_target_vehicle_marker_pose = feedback.pose
             if feedback.event_type == InteractiveMarkerFeedback.MENU_SELECT:
-                if feedback.menu_entry_id == 1: 
-                    if self.selected_robot_index is not None and self.last_vehicle_marker_pose is not None:
-                        self.execute_plan = True
-                        self.get_logger().info(
-                            f"Execute clicked: plan will be applied to robot {self.robots_prefix[self.selected_robot_index]}."
+                if feedback.menu_entry_id == self.execute_handle:
+                    if self.selected_robot_index is None or self.current_target_vehicle_marker_pose is None:
+                        self.get_logger().warn("Execute clicked but robot selection or planned pose is missing.")
+                        return
+                    robot = self.robots[self.selected_robot_index]
+
+                    state = robot.get_state()
+                    # Current robot pose, your state is NED, convert to NWU for planning and RViz
+                    x_now, y_now, z_now = state['pose'][0], state['pose'][1], state['pose'][2]
+                    roll_now, pitch_now, yaw_now = state['pose'][3], state['pose'][4], state['pose'][5]
+                    start_xyz = np.array([x_now, -y_now, -z_now], float)
+                    q_start_xyzw = R.from_euler('xyz', [roll_now, -pitch_now, -yaw_now]).as_quat()  # xyzw
+                    start_quat_wxyz = np.array([q_start_xyzw[3], q_start_xyzw[0], q_start_xyzw[1], q_start_xyzw[2]], float)
+
+                    # Goal from the UV marker in base frame
+                    # Goal is already from rviz NWU so no need for convertion
+                    robot.final_goal = self.current_target_vehicle_marker_pose
+                    gx = robot.final_goal.position.x
+                    gy = robot.final_goal.position.y
+                    gz = robot.final_goal.position.z
+                    goal_xyz = np.array([gx, gy, gz], float)
+
+                    goal_quat_wxyz = np.array([
+                        robot.final_goal.orientation.w,
+                        robot.final_goal.orientation.x,
+                        robot.final_goal.orientation.y,
+                        robot.final_goal.orientation.z,
+                    ], float)
+                    k_planner = robot.planner
+                    try:
+                                  # transform from base to world for FCL checks
+                        # t = self.tf_buffer.lookup_transform('world', self.base_frame, rclpy.time.Time())
+                        # qbw = [
+                        #     t.transform.rotation.w,
+                        #     t.transform.rotation.x,
+                        #     t.transform.rotation.y,
+                        #     t.transform.rotation.z,
+                        # ]
+                        # tbw = [
+                        #     t.transform.translation.x,
+                        #     t.transform.translation.y,
+                        #     t.transform.translation.z,
+                        # ]
+                        # base_to_world = {"quat_wxyz": qbw, "trans_xyz": tbw}
+                        
+                        
+                        k_planner.planned_result = plan_se3_path(
+                            start_xyz=start_xyz,
+                            start_quat_wxyz=start_quat_wxyz,
+                            goal_xyz=goal_xyz,
+                            goal_quat_wxyz=goal_quat_wxyz,
+                            time_limit=0.2,
                         )
-                    else:
-                        self.get_logger().warn("Execute clicked but no robot was selected or no planned pose available.")
+                        # result = plan_se3_path(
+                        #     start_xyz=start_xyz,
+                        #     start_quat_wxyz=start_quat_wxyz,
+                        #     goal_xyz=goal_xyz,
+                        #     goal_quat_wxyz=goal_quat_wxyz,
+                        #     time_limit=1.0,
+                        #     fcl_world=self.fcl_world,
+                        #     base_to_world=base_to_world,
+                        #     safety_margin=0.02,  # set to 0.0 to use pure collision
+                        # )
+
+                        self.get_logger().info(f"Planned path with {k_planner.planned_result['count']} states. Waypoint spheres published.")
+                    except Exception as e:
+                        self.get_logger().error(f"Planner failed, {e}")
+                        k_planner.planned_result = None
                 else:
-                    robot_index = feedback.menu_entry_id - 3
-                    if 0 <= robot_index < len(self.robots_prefix):
-                        self.selected_robot_index = robot_index
-                        self.get_logger().info(f"Robot {self.robots_prefix[robot_index]} selected for planning.")
+                    # otherwise, a robot menu item was clicked
+                    if feedback.menu_entry_id in self.menu_id_to_robot_index:
+                        self.selected_robot_index = self.menu_id_to_robot_index[feedback.menu_entry_id]
+                        self.get_logger().info(f"Robot {self.robots_prefix[self.selected_robot_index]} selected for planning.")
+
             elif feedback.event_type == InteractiveMarkerFeedback.POSE_UPDATE:
                 pass
 
@@ -300,9 +406,9 @@ class BasicControlsNode(Node):
             task_point = np.array([feedback.pose.position.x,
                                 feedback.pose.position.y,
                                 feedback.pose.position.z])
-            if self.is_point_valid(task_point):
+            if is_point_valid(self.workspace_hull, self.vehicle_body_hull, task_point):
                 self.last_valid_task_pose = feedback.pose
-                relative_pose = self.get_relative_pose(self.arm_base_pose, self.last_valid_task_pose)
+                relative_pose = get_relative_pose(self.arm_base_pose, self.last_valid_task_pose)
                 self.q0_des, self.q1_des, self.q2_des = self.robots[self.selected_robot_index].arm.ik_solver([
                     relative_pose.position.x, relative_pose.position.y, relative_pose.position.z
                 ], pose="underarm")
@@ -316,226 +422,19 @@ class BasicControlsNode(Node):
                 dz = feedback.pose.position.z - self.last_valid_task_pose.position.z
 
                 # Shift the uv_marker by this delta so that the task marker remains at the boundary.
-                self.last_vehicle_marker_pose.position.x += dx
-                self.last_vehicle_marker_pose.position.y += dy
-                self.last_vehicle_marker_pose.position.z += dz
+                self.current_target_vehicle_marker_pose.position.x += dx
+                self.current_target_vehicle_marker_pose.position.y += dy
+                self.current_target_vehicle_marker_pose.position.z += dz
 
                 # Update the uv_marker pose on the server.
-                self.server.setPose("uv_marker", self.last_vehicle_marker_pose)
+                self.server.setPose("uv_marker", self.current_target_vehicle_marker_pose)
                 self.server.applyChanges()
 
                 # Reset the task marker back to the last valid pose (i.e. at the boundary).
                 self.server.setPose("task_marker", self.last_valid_task_pose)
                 self.server.applyChanges()
 
-
-    def makeBox(self, fixed, scale, marker_type, initial_pose):
-        marker = Marker()
-        marker.type = marker_type
-        marker.pose = initial_pose
-        marker.scale.x = scale * 0.25
-        marker.scale.y = scale * 0.25
-        marker.scale.z = scale * 0.25
-
-        if fixed:
-            marker.color.r = 1.0 
-            marker.color.g = 0.0
-            marker.color.b = 0.0
-            marker.color.a = 1.0
-        else:
-            marker.color.r = 0.5
-            marker.color.g = 0.5
-            marker.color.b = 0.5
-            marker.color.a = 1.0
-        return marker
-
-    def makeBoxControl(self, msg, fixed, interaction_mode, marker_type,
-                       scale=1.0, show_6dof=False, initial_pose=Pose(), ignore_dof=[]):
-        control = InteractiveMarkerControl()
-        control.always_visible = True
-        control.markers.append(self.makeBox(fixed, scale, marker_type, initial_pose))
-        control.interaction_mode = interaction_mode
-        msg.controls.append(control)
-
-        if show_6dof:
-            if 'roll' not in ignore_dof:
-                control = InteractiveMarkerControl()
-                control.orientation.w = 1.0
-                control.orientation.x = 1.0
-                control.orientation.y = 0.0
-                control.orientation.z = 0.0
-                control.name = "roll"
-                control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-                if fixed:
-                    control.orientation_mode = InteractiveMarkerControl.FIXED
-                msg.controls.append(control)
-
-            if 'surge' not in ignore_dof:
-                control = InteractiveMarkerControl()
-                control.orientation.w = 1.0
-                control.orientation.x = 1.0
-                control.orientation.y = 0.0
-                control.orientation.z = 0.0
-                control.name = "surge"
-                control.interaction_mode = InteractiveMarkerControl.MOVE_AXIS
-                if fixed:
-                    control.orientation_mode = InteractiveMarkerControl.FIXED
-                msg.controls.append(control)
-
-            if 'yaw' not in ignore_dof:
-                control = InteractiveMarkerControl()
-                control.orientation.w = 1.0
-                control.orientation.x = 0.0
-                control.orientation.y = 1.0
-                control.orientation.z = 0.0
-                control.name = "yaw"
-                control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-                if fixed:
-                    control.orientation_mode = InteractiveMarkerControl.FIXED
-                msg.controls.append(control)
-
-            if 'heave' not in ignore_dof:
-                control = InteractiveMarkerControl()
-                control.orientation.w = 1.0
-                control.orientation.x = 0.0
-                control.orientation.y = 1.0
-                control.orientation.z = 0.0
-                control.name = "heave"
-                control.interaction_mode = InteractiveMarkerControl.MOVE_AXIS
-                if fixed:
-                    control.orientation_mode = InteractiveMarkerControl.FIXED
-                msg.controls.append(control)
-
-            if 'pitch' not in ignore_dof:
-                control = InteractiveMarkerControl()
-                control.orientation.w = 1.0
-                control.orientation.x = 0.0
-                control.orientation.y = 0.0
-                control.orientation.z = 1.0
-                control.name = "pitch"
-                control.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
-                if fixed:
-                    control.orientation_mode = InteractiveMarkerControl.FIXED
-                msg.controls.append(control)
-
-            if 'sway' not in ignore_dof:
-                control = InteractiveMarkerControl()
-                control.orientation.w = 1.0
-                control.orientation.x = 0.0
-                control.orientation.y = 0.0
-                control.orientation.z = 1.0
-                control.name = "sway"
-                control.interaction_mode = InteractiveMarkerControl.MOVE_AXIS
-                if fixed:
-                    control.orientation_mode = InteractiveMarkerControl.FIXED
-                msg.controls.append(control)
-
-        return control
-
-    def make_UVMS_Dof_Marker(self, name, description, frame_id, robot, fixed,
-                            interaction_mode, initial_pose, scale,
-                            show_6dof=False, ignore_dof=[]):
-        int_marker = InteractiveMarker()
-        int_marker.header.frame_id = frame_id
-        int_marker.pose = initial_pose
-        int_marker.scale = scale
-        int_marker.name = name
-        int_marker.description = description
-        marker_type = Marker.CUBE
-        if robot == 'task':
-            marker_type = Marker.SPHERE
-        self.makeBoxControl(int_marker, fixed, interaction_mode, marker_type,
-                            int_marker.scale, show_6dof, Pose(), ignore_dof)
-        if robot == 'uv':
-            self.makeBoxControl(int_marker, True, InteractiveMarkerControl.NONE, Marker.CUBE, 0.2, False, self.arm_base_pose, ignore_dof)
-        return int_marker
-
-    def make_menu_control(self):
-        menu_control = InteractiveMarkerControl()
-        menu_control.interaction_mode = InteractiveMarkerControl.MENU
-        menu_control.name = "robots_control_menu"
-        menu_control.description = "target"
-        menu_control.always_visible = True
-        return menu_control
-
-    def is_point_valid(self, point):
-        """
-        Returns True if 'point' is in the workspace hull but *not* in the vehicle hull.
-        Equivalently, we want:  point ∈ (Workspace \\ Vehicle) = Workspace ∩ (Vehicle)^c
-        """
-        inside_workspace = np.all(
-            np.dot(self.workspace_hull.equations[:, :-1], point) + self.workspace_hull.equations[:, -1] <= 0
-        )
-        inside_vehicle = np.all(
-            np.dot(self.vehicle_body_hull.equations[:, :-1], point) + self.vehicle_body_hull.equations[:, -1] <= 0
-        )
-        # accept the point if it is inside the workspace and *not* inside the vehicle hull.
-        return inside_workspace and not inside_vehicle
-
-
-    def generate_rov_ellipsoid(self, a=0.5, b=0.3, c=0.2, num_points=10000):
-        points = []
-        while len(points) < num_points:
-            pt = np.random.uniform(-1, 1, 3)
-            if (pt[0]/a)**2 + (pt[1]/b)**2 + (pt[2]/c)**2 <= 1:
-                points.append(pt)
-        return points
-
-    def broadcast_pose(self, stamp, pose, parent_frame, child_frame):
-        t = TransformStamped()
-        t.header.stamp = stamp
-        t.header.frame_id = parent_frame
-        t.child_frame_id = child_frame
-        t.transform.translation.x = pose.position.x
-        t.transform.translation.y = pose.position.y
-        t.transform.translation.z = pose.position.z
-        t.transform.rotation = pose.orientation
-        self.tf_broadcaster.sendTransform(t)
-
-    def dm_to_pose(self, dm):
-        pose = Pose()
-        pose.position.x = float(dm[0])
-        pose.position.y = float(dm[1])
-        pose.position.z = float(dm[2])
-        roll = float(dm[3])
-        pitch = float(dm[4])
-        yaw = float(dm[5])
-        q = R.from_euler('xyz', [roll, pitch, yaw]).as_quat()
-        pose.orientation.x = q[0]
-        pose.orientation.y = q[1]
-        pose.orientation.z = q[2]
-        pose.orientation.w = q[3]
-        return pose
-
-
-    def pose_to_homogeneous(self, pose):
-        """Convert a geometry_msgs/Pose into a 4x4 homogeneous transformation matrix."""
-        quat = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
-        trans = [pose.position.x, pose.position.y, pose.position.z]
-        mat = quaternion_matrix(quat)
-        mat[0:3, 3] = trans
-        return mat
-
-    def homogeneous_to_pose(self, mat):
-        """Convert a 4x4 homogeneous transformation matrix into a geometry_msgs/Pose."""
-        pose = Pose()
-        pose.position.x = mat[0, 3]
-        pose.position.y = mat[1, 3]
-        pose.position.z = mat[2, 3]
-        quat = quaternion_from_matrix(mat)
-        pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = quat
-        return pose
-
-    def get_relative_pose(self, marker_pose, endeffector_pose):
-        """
-        Compute the relative pose of the endeffector with respect to the marker.
-        marker_pose and endeffector_pose should be geometry_msgs/Pose.
-        Returns a Pose representing the endeffector pose in the marker's frame.
-        """
-        T_marker = self.pose_to_homogeneous(marker_pose)
-        T_ee = self.pose_to_homogeneous(endeffector_pose)
-        T_rel = np.dot(np.linalg.inv(T_marker), T_ee)
-        return self.homogeneous_to_pose(T_rel)
+   
 
 def main(args=None):
     rclpy.init(args=args)
