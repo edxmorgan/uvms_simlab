@@ -846,19 +846,27 @@ class Robot(Base):
     def compute_manifold_errors(self):
         st = self.get_state()
 
+        goal_xyz, goal_quat_xyzw = self.final_goal
+
         # vehicle part
         x_curr = np.asarray(st["pose"], dtype=float)
-        x_des  = np.asarray(self.pose_command, dtype=float)
+        x_wp_des  = np.asarray(self.pose_command, dtype=float)
 
         def rpy_to_xyzw(rpy):
             return R.from_euler("xyz", rpy, degrees=False).as_quat()
 
         X_curr = SE3(pos=x_curr[:3], xyzw=rpy_to_xyzw(x_curr[3:6]))
-        X_des  = SE3(pos=x_des[:3],  xyzw=rpy_to_xyzw(x_des[3:6]))
-        err_se3 = (X_des - X_curr).exp()
-        err_se3_trans = np.abs(err_se3.translation()).flatten().tolist()
-        err_se3_rotation = np.abs(err_se3.rotation().as_euler()).flatten().tolist()
+        X_wp_des  = SE3(pos=x_wp_des[:3],  xyzw=rpy_to_xyzw(x_wp_des[3:6]))
+        X_goal_des  = SE3(pos=goal_xyz,  xyzw=goal_quat_xyzw)
 
+
+        err_wp_se3 = (X_wp_des - X_curr).exp()
+        err_wp_se3_trans = np.abs(err_wp_se3.translation()).flatten().tolist()
+        err_wp_se3_rotation = np.abs(err_wp_se3.rotation().as_euler()).flatten().tolist()
+
+        err_goal_se3 = (X_goal_des - X_curr).exp()
+        err_goal_se3_trans = np.abs(err_goal_se3.translation()).flatten().tolist()
+        err_goal_se3_rotation = np.abs(err_goal_se3.rotation().as_euler()).flatten().tolist()
 
         # manipulator part, build S1 objects, subtract per joint, then extract scalar tangent
         q_curr = np.asarray(st["q"], dtype=float)
@@ -869,35 +877,7 @@ class Robot(Base):
 
         err_s1 = [np.abs((Xd - Xc).exp().angle) for Xd, Xc in zip(X_m_des, X_m_curr)]  # list of S1Tangent
 
-        return err_se3_trans, err_se3_rotation, err_s1
-
-    def apply_surge_yaw_axis_align(self):
-        state = self.get_state()
-        # Compute the vehicle (position) error in x, y, z only.
-        pos_error = np.linalg.norm(np.array(state['pose'][:3]) - np.array(self.pose_command[0:3]))
-
-        # Define a threshold error at which we start blending.
-        pos_blend_threshold = 1.1  # Adjust based on your system's scale
-
-        # Calculate the blend factor.
-        # When pos_error >= pos_blend_threshold, blend_factor will be 0 (full velocity_yaw).
-        # When pos_error == 0, blend_factor will be 1 (full target_yaw).
-        blend_factor = np.clip((pos_blend_threshold - pos_error) / pos_blend_threshold, 0.0, 1.0)
-
-        # Get the velocity-based yaw.
-        self.velocity_yaw = self.orient_towards_velocity()
-
-        # If velocity_yaw is not available, simply use the target yaw.
-        if self.velocity_yaw is None:
-            final_yaw = self.pose_command[5]
-        else:
-            # Blend the yaw values: more weight to target_yaw as the position error decreases.
-            final_yaw = (1 - blend_factor) * self.velocity_yaw + blend_factor * self.pose_command[5]
-
-        self.node.get_logger().debug(f"pos_error: {pos_error:.3f}, blend_factor: {blend_factor:.3f}, final_yaw: {final_yaw:.3f}")
-
-        # Update the yaw in the command message with the blended value.
-        self.pose_command[5] = final_yaw
+        return err_wp_se3_trans, err_wp_se3_rotation, err_s1 , err_goal_se3_trans, err_goal_se3_rotation
 
 
     def start_joystick(self, device_interface):
@@ -1133,6 +1113,7 @@ class Robot(Base):
 
         self.gt_trajectory_path_publisher.publish(gt_tra_path_msg)
 
+
     def orient_towards_velocity(self):
         """
         Orient the robot to face the direction of its current positive velocity.
@@ -1140,24 +1121,16 @@ class Robot(Base):
         """
         vx = self.ned_vel[0]
         vy = self.ned_vel[1]
-
-        # Compute the magnitude of the horizontal velocity
-        horizontal_speed = np.hypot(vx, vy)
-
         # Threshold to avoid undefined behavior when velocity is near zero
-        velocity_threshold = 1e-3
+        velocity_threshold = 1e-12
+        desired_yaw = np.arctan2(vy, vx + velocity_threshold)
 
-        if horizontal_speed > velocity_threshold:
-            desired_yaw = np.arctan2(vy, vx)
-
-            # -- Get the CURRENT yaw from the last pose in trajectory_poses
-            current_yaw = self.ned_pose[5]
-            # -- Compute the shortest-path yaw
-            adjusted_yaw = self.normalize_angle(desired_yaw, current_yaw)
-
-            return adjusted_yaw
-
-            # self.node.get_logger().info(f"Orienting towards velocity:current yaw={current_yaw} radians  desired yaw={desired_yaw} radians adjusted yaw={adjusted_yaw} radians")
+        # -- Get the CURRENT yaw from the last pose in trajectory_poses
+        current_yaw = self.ned_pose[5]
+        # -- Compute the shortest-path yaw
+        adjusted_yaw = self.normalize_angle(desired_yaw, current_yaw)
+        # self.node.get_logger().info(f"Orienting towards velocity:current yaw={current_yaw} radians  desired yaw={desired_yaw} radians adjusted yaw={adjusted_yaw} radians")
+        return adjusted_yaw
 
     def normalize_angle(self, desired_yaw, current_yaw):
         # Compute the smallest angular difference
@@ -1166,7 +1139,6 @@ class Robot(Base):
 
         # Adjust desired_yaw to ensure the shortest rotation path
         adjusted_desired_yaw = current_yaw + angle_diff
-
         return adjusted_desired_yaw
 
     def quaternion_to_euler(self, orientation):

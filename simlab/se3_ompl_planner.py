@@ -1,7 +1,8 @@
 # se3_ompl_planner.py
 import numpy as np
 from functools import partial
-
+from scipy.spatial.transform import Rotation as R
+from scipy.interpolate import BPoly
 try:
     from ompl import base as ob
     from ompl import geometric as og
@@ -120,7 +121,16 @@ def plan_se3_path(
     gr.w = float(goal_quat_wxyz[0]); gr.x = float(goal_quat_wxyz[1])
     gr.y = float(goal_quat_wxyz[2]); gr.z = float(goal_quat_wxyz[3])
 
+    # Enforce bounds to normalize SO3 and clamp R3
+    space.enforceBounds(s)
+    space.enforceBounds(g)
+
     ss.setStartAndGoalStates(start, goal)
+
+    if not ss.getSpaceInformation().satisfiesBounds(s):
+        raise RuntimeError("Start violates bounds after enforceBounds")
+    if not ss.getSpaceInformation().satisfiesBounds(g):
+        raise RuntimeError("Goal violates bounds after enforceBounds")
 
     # planner and resolution
     ss.setPlanner(og.BITstar(ss.getSpaceInformation()))
@@ -128,7 +138,11 @@ def plan_se3_path(
     ss.getSpaceInformation().setStateValidityCheckingResolution(0.01)
 
     if not ss.solve(time_limit):
-        raise RuntimeError("Planner did not find a solution")
+        # raise RuntimeError("Planner did not find a solution")
+        return {
+            "status":False,
+            "message":"Planner did not find a solution"
+        }
 
     path = ss.getSolutionPath()
     path.interpolate(50)
@@ -146,4 +160,6 @@ def plan_se3_path(
         "xyz": np.asarray(xyz, float),
         "quat_wxyz": np.asarray(quat_wxyz, float),
         "count": path.getStateCount(),
+        "status":True,
+        "message":"Planner found solution"
     }

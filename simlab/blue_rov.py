@@ -119,9 +119,9 @@ class Params:
     below_surface = 1.0 #random
     dt_s = T/N
 
-    kp = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
-    ki = np.array([0, 0, 0, 0, 0, 0])
-    kd = np.array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2])
+    kp = np.array([1.5, 1.5, 1.5, 0.5, 0.5, 0.5])
+    ki = np.array([0, 0, 0, 0.05, 0.05, 0.05])
+    kd = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
     
     sim_params = np.concatenate(( np.array([m]) , np.array([W]), np.array([B]), 
                                            rg, rb, Io, added_m, coupl_added_m, linear_dc, quadratic_dc, v_flow))

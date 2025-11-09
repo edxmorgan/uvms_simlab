@@ -30,7 +30,8 @@ setup(
         ('lib/' + package_name, [package_name+'/se3_ompl_planner.py']),
         ('lib/' + package_name, [package_name+'/fcl_checker.py']),
         ('lib/' + package_name, [package_name+'/interactive_utils.py']),
-        ('lib/' + package_name, [package_name+'/planner_markers.py'])
+        ('lib/' + package_name, [package_name+'/planner_markers.py']),
+        ('lib/' + package_name, [package_name+'/frame_utils.py'])
     ],
 
     install_requires=['setuptools',

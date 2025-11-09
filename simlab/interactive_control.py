@@ -40,7 +40,7 @@ from se3_ompl_planner import plan_se3_path
 from fcl_checker import FCLWorld
 from interactive_utils import *
 from planner_markers import PathPlanner
-
+from frame_utils import PoseX
 class BasicControlsNode(Node):
     def __init__(self):
         super().__init__('uvms_interactive_controls',
@@ -246,39 +246,76 @@ class BasicControlsNode(Node):
                 desired_body_vel = robot.body_vel_command + robot.arm.dq_command
                 robot.publish_robot_path()
 
-                if robot.final_goal is not None:
-                    # k_planner.planned_result["xyz"][i]
-                    # k_planner.planned_result["quat_wxyz"][i]
+                if robot.final_goal is not None and k_planner.planned_result['status']:
+                    waypoints = k_planner.planned_result["xyz"]
+                    quats = k_planner.planned_result["quat_wxyz"]
 
-                    x_nwu = robot.final_goal.position.x
-                    y_nwu = robot.final_goal.position.y
-                    z_nwu = robot.final_goal.position.z
-                    roll_nwu, pitch_nwu, yaw_nwu = robot.quaternion_to_euler(robot.final_goal.orientation)
+                    # Initialize index if not present
+                    if not hasattr(robot, "wp_index"):
+                        robot.wp_index = 0
 
-                    x_ned = x_nwu
-                    y_ned = -y_nwu
-                    z_ned = -z_nwu
+                    # Use current waypoint
+                    target_nwu = waypoints[robot.wp_index]
+                    target_quat = quats[robot.wp_index]
 
-                    raw_roll_ned = roll_nwu
-                    raw_pitch_ned = -pitch_nwu
-                    raw_yaw_ned = -yaw_nwu
+                    # Convert to NED for control
+                    target_pose = PoseX.from_pose(
+                        xyz=target_nwu,
+                        rot=target_quat,
+                        rot_rep="quat_wxyz",
+                        frame="NWU",
+                    )
+                    p_cmd_ned, rpy_cmd_ned = target_pose.get_pose(frame="NED", rot_rep="euler_xyz")
 
-                    curr_roll, curr_pitch, curr_yaw = state['pose'][3:6]
+                    # Get the velocity-based yaw.
+                    adjusted_yaw = robot.orient_towards_velocity()
 
-                    target_roll = robot.normalize_angle(raw_roll_ned, curr_roll)
-                    target_pitch = robot.normalize_angle(raw_pitch_ned, curr_pitch)
-                    target_yaw = robot.normalize_angle(raw_yaw_ned, curr_yaw)
+                    # Compute current manifold errors
+                    wp_err_trans, wp_err_rot, wp_err_joint, goal_err_trans, goal_err_rot = robot.compute_manifold_errors()
+                    
+                    goal_xyz_error = np.linalg.norm(goal_err_trans)
 
-                    robot.pose_command = [x_ned, y_ned, z_ned,target_roll, target_pitch, target_yaw]
+
+                    # Define a threshold error at which we start blending.
+                    pos_blend_threshold = 1.1  # Adjust based on your system's scale
+
+                    # Calculate the blend factor.
+                    # When pos_error >= pos_blend_threshold, blend_factor will be 0 (full velocity_yaw).
+                    # When pos_error == 0, blend_factor will be 1 (full target_yaw).
+                    blend_factor = np.clip((pos_blend_threshold - goal_xyz_error) / pos_blend_threshold, 0.0, 1.0)
+
+                    # If velocity_yaw is not available, simply use the target yaw.
+                    if adjusted_yaw is None:
+                        final_yaw = rpy_cmd_ned[2]
+                    else:
+                        # Blend the yaw values: more weight to target_yaw as the position error decreases.
+                        final_yaw = (1 - blend_factor) * adjusted_yaw + blend_factor * rpy_cmd_ned[2]
+
+                    # self.get_logger().info(f"{final_yaw} yaw now at pos err {goal_xyz_error}")
+
+                    robot.pose_command = [
+                        float(p_cmd_ned[0]),
+                        float(p_cmd_ned[1]),
+                        float(p_cmd_ned[2]),
+                        float(rpy_cmd_ned[0]),
+                        float(rpy_cmd_ned[1]),
+                        float(final_yaw),
+                    ]
+
+                    wp_pos_error = np.linalg.norm(wp_err_trans)
+                    wp_rot_error = np.linalg.norm(wp_err_rot)
+
+                    # Check if translation error small enough to move to next waypoint
+                    if wp_pos_error < 1e-1 and wp_rot_error < 1e-1:
+                        if robot.wp_index < len(waypoints) - 1:
+                            robot.wp_index += 1
+                            self.get_logger().info(f"{robot.prefix} → waypoint {robot.wp_index}")
+                        else:
+                            # Reached final waypoint
+                            self.get_logger().info(f"{robot.prefix} path complete", once=True)
+
                     robot.arm.q_command = [self.q0_des, self.q1_des, self.q2_des, self.q3_des]
-
-                    # robot.apply_surge_yaw_axis_align()
-                    err_se3_trans, err_se3_rotation, err_s1= robot.compute_manifold_errors()
-                    # self.get_logger().info(f"{err_se3_trans}, {err_se3_rotation}, {err_s1}")
-                else:
-                    robot.pose_command = state['pose']
-                    robot.arm.q_command = state['q']
-            
+                                            
 
             veh_state_vec = np.array(
                 list(state['pose']) + list(state['body_vel']),
@@ -333,46 +370,50 @@ class BasicControlsNode(Node):
                         self.get_logger().warn("Execute clicked but robot selection or planned pose is missing.")
                         return
                     robot = self.robots[self.selected_robot_index]
-
                     state = robot.get_state()
-                    # Current robot pose, your state is NED, convert to NWU for planning and RViz
-                    x_now, y_now, z_now = state['pose'][0], state['pose'][1], state['pose'][2]
-                    roll_now, pitch_now, yaw_now = state['pose'][3], state['pose'][4], state['pose'][5]
-                    start_xyz = np.array([x_now, -y_now, -z_now], float)
-                    q_start_xyzw = R.from_euler('xyz', [roll_now, -pitch_now, -yaw_now]).as_quat()  # xyzw
-                    start_quat_wxyz = np.array([q_start_xyzw[3], q_start_xyzw[0], q_start_xyzw[1], q_start_xyzw[2]], float)
 
-                    # Goal from the UV marker in base frame
-                    # Goal is already from rviz NWU so no need for convertion
-                    robot.final_goal = self.current_target_vehicle_marker_pose
-                    gx = robot.final_goal.position.x
-                    gy = robot.final_goal.position.y
-                    gz = robot.final_goal.position.z
+                    # Build a pose from the current NED state, then query NWU for planning
+                    pose_now = PoseX.from_pose(
+                        xyz=np.array(state['pose'][0:3], float),
+                        rot=np.array(state['pose'][3:6], float),   # roll, pitch, yaw
+                        rot_rep="euler_xyz",
+                        frame="NED",
+                    )
+                    start_xyz, start_quat_wxyz = pose_now.get_pose(frame="NWU", rot_rep="quat_wxyz")
+
+                    gx = self.current_target_vehicle_marker_pose.position.x
+                    gy = self.current_target_vehicle_marker_pose.position.y
+                    gz = self.current_target_vehicle_marker_pose.position.z
                     goal_xyz = np.array([gx, gy, gz], float)
 
                     goal_quat_wxyz = np.array([
-                        robot.final_goal.orientation.w,
-                        robot.final_goal.orientation.x,
-                        robot.final_goal.orientation.y,
-                        robot.final_goal.orientation.z,
+                        self.current_target_vehicle_marker_pose.orientation.w,
+                        self.current_target_vehicle_marker_pose.orientation.x,
+                        self.current_target_vehicle_marker_pose.orientation.y,
+                        self.current_target_vehicle_marker_pose.orientation.z,
                     ], float)
+
+
+                    goal_now = PoseX.from_pose(
+                        xyz=np.array(goal_xyz, float),
+                        rot=np.array(goal_quat_wxyz, float),   # roll, pitch, yaw
+                        rot_rep="quat_wxyz",
+                        frame="NWU",
+                    )
+
+                    # Goal from the UV marker is in NWU, convert that to NED for control and save it.
+                    robot.final_goal = goal_now.get_pose(frame="NED", rot_rep="quat_xyzw")
+                    robot.wp_index = 0
+   
                     k_planner = robot.planner
                     try:
-                                  # transform from base to world for FCL checks
-                        # t = self.tf_buffer.lookup_transform('world', self.base_frame, rclpy.time.Time())
-                        # qbw = [
-                        #     t.transform.rotation.w,
-                        #     t.transform.rotation.x,
-                        #     t.transform.rotation.y,
-                        #     t.transform.rotation.z,
-                        # ]
-                        # tbw = [
-                        #     t.transform.translation.x,
-                        #     t.transform.translation.y,
-                        #     t.transform.translation.z,
-                        # ]
-                        # base_to_world = {"quat_wxyz": qbw, "trans_xyz": tbw}
-                        
+                        # self.get_logger().info(
+                        #     "Planning request\n"
+                        #     f"  start_xyz         {start_xyz.tolist()}\n"
+                        #     f"  start_quat_wxyz   {start_quat_wxyz.tolist()}\n"
+                        #     f"  goal_xyz          {goal_xyz.tolist()}\n"
+                        #     f"  goal_quat_wxyz    {goal_quat_wxyz.tolist()}\n"
+                        # )
                         
                         k_planner.planned_result = plan_se3_path(
                             start_xyz=start_xyz,
@@ -381,18 +422,9 @@ class BasicControlsNode(Node):
                             goal_quat_wxyz=goal_quat_wxyz,
                             time_limit=0.2,
                         )
-                        # result = plan_se3_path(
-                        #     start_xyz=start_xyz,
-                        #     start_quat_wxyz=start_quat_wxyz,
-                        #     goal_xyz=goal_xyz,
-                        #     goal_quat_wxyz=goal_quat_wxyz,
-                        #     time_limit=1.0,
-                        #     fcl_world=self.fcl_world,
-                        #     base_to_world=base_to_world,
-                        #     safety_margin=0.02,  # set to 0.0 to use pure collision
-                        # )
-
-                        self.get_logger().info(f"Planned path with {k_planner.planned_result['count']} states. Waypoint spheres published.")
+                        self.get_logger().info(
+                            f"Planned path with {k_planner.planned_result['count']} states"
+                        )
                     except Exception as e:
                         self.get_logger().error(f"Planner failed, {e}")
                         k_planner.planned_result = None
