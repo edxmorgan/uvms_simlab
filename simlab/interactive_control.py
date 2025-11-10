@@ -20,7 +20,6 @@ np.float = float  # Patch NumPy to satisfy tf_transformations' use of np.float
 import copy
 import rclpy
 from rclpy.node import Node
-
 import casadi as ca
 from geometry_msgs.msg import Pose
 from visualization_msgs.msg import Marker, InteractiveMarkerControl, InteractiveMarkerFeedback
@@ -30,6 +29,7 @@ from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSDurabilityPolicy, QoSReli
 from robot import Robot
 import tf2_ros
 import ament_index_python
+from functools import partial
 import os
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Header
@@ -102,7 +102,9 @@ class BasicControlsNode(Node):
         self.fcl_world.set_planner_radius(planner_radius)
         
         frequency = 500  # Hz
-        self.timer = self.create_timer(1.0 / frequency, self.timer_callback)        
+        self.create_timer(1.0 / frequency, self.timer_callback)
+        self.create_timer(1.0 / frequency, lambda: self.fcl_world.update_from_tf(self.tf_buffer, rclpy.time.Time()))
+
 
         self.current_target_vehicle_marker_pose = Pose()
         self.current_target_vehicle_marker_pose.orientation.w = 1.0
@@ -213,8 +215,7 @@ class BasicControlsNode(Node):
         self.header = Header()
         self.header.frame_id = self.vehicle_marker_frame
 
-
-    def timer_callback(self):
+    def timer_callback(self):        
         stamp_now = self.get_clock().now().to_msg()
 
         t = get_broadcast_tf(stamp_now, self.current_target_vehicle_marker_pose, self.base_frame, self.vehicle_marker_frame)
@@ -239,6 +240,7 @@ class BasicControlsNode(Node):
                         wp_size=0.08,
                         goal_size=0.14,
                     )
+
 
             state = robot.get_state()
             if state['status'] == 'active':
@@ -309,7 +311,7 @@ class BasicControlsNode(Node):
                     if wp_pos_error < 1e-1 and wp_rot_error < 1e-1:
                         if robot.wp_index < len(waypoints) - 1:
                             robot.wp_index += 1
-                            self.get_logger().info(f"{robot.prefix} → waypoint {robot.wp_index}")
+                            # self.get_logger().info(f"{robot.prefix} → waypoint {robot.wp_index}")
                         else:
                             # Reached final waypoint
                             self.get_logger().info(f"{robot.prefix} path complete", once=True)
@@ -414,13 +416,17 @@ class BasicControlsNode(Node):
                         #     f"  goal_xyz          {goal_xyz.tolist()}\n"
                         #     f"  goal_quat_wxyz    {goal_quat_wxyz.tolist()}\n"
                         # )
-                        
+
+
                         k_planner.planned_result = plan_se3_path(
+                            self,
                             start_xyz=start_xyz,
                             start_quat_wxyz=start_quat_wxyz,
                             goal_xyz=goal_xyz,
                             goal_quat_wxyz=goal_quat_wxyz,
                             time_limit=0.2,
+                            fcl_world=self.fcl_world,
+                            safety_margin=0.2,
                         )
                         self.get_logger().info(
                             f"Planned path with {k_planner.planned_result['count']} states"

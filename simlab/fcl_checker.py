@@ -130,15 +130,15 @@ class FCLWorld:
         ddata = fcl.DistanceData(request=req)
         self.manager_robot.distance(self.manager_env, ddata, fcl.defaultDistanceCallback)
 
-        md = float(ddata.result.min_distance)
         # nearest_points is two 3D tuples
-        if ddata.result.nearest_points is not None and len(ddata.result.nearest_points) == 2:
+        if ddata.result is not None and ddata.result.nearest_points is not None and len(ddata.result.nearest_points) == 2:
+            md = float(ddata.result.min_distance)
             pr = np.array(ddata.result.nearest_points[0], dtype=float)
             pe = np.array(ddata.result.nearest_points[1], dtype=float)
+            resp = md, pr, pe
         else:
-            pr = np.zeros(3, dtype=float)
-            pe = np.zeros(3, dtype=float)
-        return md, pr, pe
+            resp = None
+        return resp
 
     # --------------- optional planner sphere helpers ---------------
 
@@ -150,6 +150,14 @@ class FCLWorld:
     def planner_in_collision_at_xyz(self, xyz) -> bool:
         self._planner_obj.setTransform(fcl.Transform([1.0, 0.0, 0.0, 0.0], [float(x) for x in xyz]))
         req = fcl.CollisionRequest(num_max_contacts=1, enable_contact=False)
-        data = fcl.CollisionData(request=req)
-        self.manager_env.collide(self._planner_obj, data, fcl.defaultCollisionCallback)
-        return bool(data.result.is_collision)
+        cdata = fcl.CollisionData(request=req)
+        self.manager_env.collide(self._planner_obj, cdata, fcl.defaultCollisionCallback)
+        return bool(cdata.result.is_collision)
+    
+    def min_distance_xyz(self, xyz) -> bool:
+        self._planner_obj.setTransform(fcl.Transform([1.0, 0.0, 0.0, 0.0], [float(x) for x in xyz]))
+        req = fcl.DistanceRequest(enable_nearest_points=True)
+        ddata = fcl.DistanceData(request=req)
+        self.manager_env.distance(self._planner_obj, ddata, fcl.defaultDistanceCallback)
+        md = float(ddata.result.min_distance)
+        return md

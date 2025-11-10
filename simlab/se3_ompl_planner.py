@@ -2,7 +2,8 @@
 import numpy as np
 from functools import partial
 from scipy.spatial.transform import Rotation as R
-from scipy.interpolate import BPoly
+from rclpy.node import Node
+from fcl_checker import FCLWorld
 try:
     from ompl import base as ob
     from ompl import geometric as og
@@ -17,63 +18,34 @@ X_MIN, X_MAX = -10000.0, 10000.0
 Y_MIN, Y_MAX = -10000.0, 10000.0
 Z_MIN, Z_MAX = -10000.0, 0.0
 
-# Vehicle bubble, only used for the built in obstacles fallback
-VEHICLE_RADIUS = 0.4
 
-
-# ---------- helpers ----------
-def _quat_rotate_wxyz(q, v):
-    # q in wxyz, v is 3
-    w, x, y, z = q
-    vx, vy, vz = v
-    # quaternion multiply q * [0,v] * q_conj
-    # compute cross terms directly
-    # r = v + 2*cross(q_vec, cross(q_vec, v) + w*v)
-    qv = np.array([x, y, z], dtype=float)
-    v = np.array([vx, vy, vz], dtype=float)
-    t = 2.0 * np.cross(qv, v)
-    return v + w * t + np.cross(qv, t)
-
-def _valid_with_obstacles(obstacles, state):
+def _valid_with_fcl(rclpy_node:Node, fcl_world:FCLWorld, safety_margin:float, state):
     x, y, z = state.getX(), state.getY(), state.getZ()
     if not (X_MIN <= x <= X_MAX and Y_MIN <= y <= Y_MAX and Z_MIN <= z <= Z_MAX):
         return False
-    p = np.array([x, y, z], float)
-    for obs in obstacles:
-        if obs.collides(p, margin=VEHICLE_RADIUS):
-            return False
-    return True
+    pw = np.array([x, y, z], float)
 
-def _valid_with_fcl(fcl_world, base_to_world, safety_margin, state):
-    x, y, z = state.getX(), state.getY(), state.getZ()
-    if not (X_MIN <= x <= X_MAX and Y_MIN <= y <= Y_MAX and Z_MIN <= z <= Z_MAX):
-        return False
-
-    # transform planner state from base frame to world frame for FCL
-    if base_to_world is not None:
-        q_wxyz = base_to_world["quat_wxyz"]
-        t_xyz  = base_to_world["trans_xyz"]
-        pw = _quat_rotate_wxyz(q_wxyz, [x, y, z]) + np.asarray(t_xyz, float)
-    else:
-        pw = np.array([x, y, z], float)
-
-    # if min distance API exists, use a margin, else fall back to collision test
-    if hasattr(fcl_world, "min_distance_xyz") and safety_margin is not None and safety_margin > 0.0:
-        d = float(fcl_world.min_distance_xyz(pw))
+    # use a margin, else fall back to collision test
+    if safety_margin is not None and safety_margin > 0.0:
+        # rclpy_node.get_logger().info(f"********************using min_distance_xyz")
+        d = fcl_world.min_distance_xyz(pw)
+        # rclpy_node.get_logger().info(f"********************planner points validity {pw[0]}, {pw[1]}, {pw[2]} is in collision distance : {d}")
         return d >= safety_margin
     else:
-        return not bool(fcl_world.planner_in_collision_at_xyz(pw))
+        # rclpy_node.get_logger().info(f"********************using collision test")
+        in_collision = fcl_world.planner_in_collision_at_xyz(pw)
+        # rclpy_node.get_logger().info(f"********************planner points validity {pw[0]}, {pw[1]}, {pw[2]} is in collision : {in_collision}")
+        return not in_collision
 
 
 def plan_se3_path(
+    rclpy_node,
     start_xyz,
     start_quat_wxyz,
     goal_xyz,
     goal_quat_wxyz,
     time_limit=0.75,
-    obstacles=None,
     fcl_world=None,
-    base_to_world=None,
     safety_margin=0.0,
 ):
     """
@@ -82,9 +54,6 @@ def plan_se3_path(
     base_to_world is a dict with keys quat_wxyz and trans_xyz for transforming states.
     safety_margin, in meters, requires clearance when min distance is available.
     """
-    DEFAULT_OBSTACLES = []
-    obstacles = DEFAULT_OBSTACLES if obstacles is None else obstacles
-
     space = ob.SE3StateSpace()
     bounds = ob.RealVectorBounds(3)
     bounds.setLow(0, X_MIN); bounds.setHigh(0, X_MAX)
@@ -94,15 +63,7 @@ def plan_se3_path(
 
     ss = og.SimpleSetup(space)
 
-    if fcl_world is not None:
-        checker = ob.StateValidityCheckerFn(
-            partial(_valid_with_fcl, fcl_world, base_to_world, float(safety_margin))
-        )
-    else:
-        checker = ob.StateValidityCheckerFn(
-            partial(_valid_with_obstacles, obstacles)
-        )
-
+    checker = ob.StateValidityCheckerFn(partial(_valid_with_fcl, rclpy_node, fcl_world, float(safety_margin)))
     ss.setStateValidityChecker(checker)
 
     start = ob.State(space)

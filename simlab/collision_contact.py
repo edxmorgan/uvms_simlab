@@ -59,18 +59,20 @@ class CollisionNode(Node):
 
         # 2. global clearance identical intent, now with nearest points enabled
         try:
-            md, p_robot, p_env = self.world.global_clearance()
-            # self.get_logger().info(f'global min dist {md:.4f} m')
+            resp = self.world.global_clearance()
+            if resp is not None:
+                md, p_robot, p_env = resp
+                # self.get_logger().info(f'global min dist {md:.4f} m')
 
-            # optional nearest point markers
-            # blue = color(r=0.1, g=0.1, b=0.95, a=1.0)
-            green = color(r=0.1, g=0.95, b=0.1, a=1.0)
-            # mr = make_marker('nearest_robot', 1001, 'world', 0.05, p_robot, blue)
-            me = make_marker('nearest_env',   1002, 'world', 0.05, p_env,   green)
-            # mr.lifetime.nanosec = int(0.1 * 1e9)
-            me.lifetime.nanosec = int(0.1 * 1e9)
-            # self.contact_pub.publish(mr)
-            self.contact_pub.publish(me)
+                # optional nearest point markers
+                # blue = color(r=0.1, g=0.1, b=0.95, a=1.0)
+                green = color(r=0.1, g=0.95, b=0.1, a=1.0)
+                # mr = make_marker('nearest_robot', 1001, 'world', 0.05, p_robot, blue)
+                me = make_marker('nearest_env',   1002, 'world', 0.05, p_env,   green)
+                # mr.lifetime.nanosec = int(0.1 * 1e9)
+                me.lifetime.nanosec = int(0.1 * 1e9)
+                # self.contact_pub.publish(mr)
+                self.contact_pub.publish(me)
         except Exception as e:
             self.get_logger().warn(f'clearance failed, {e}')
 
