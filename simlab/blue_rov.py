@@ -120,7 +120,7 @@ class Params:
     dt_s = T/N
 
     kp = np.array([1.5, 1.5, 1.5, 0.5, 0.5, 0.5])
-    ki = np.array([0, 0, 0, 0.05, 0.05, 0.05])
+    ki = np.array([1e-3, 1e-3, 1e-3, 0.05, 0.05, 1e-2])
     kd = np.array([1.0, 1.0, 1.0, 0.1, 0.1, 0.1])
     
     sim_params = np.concatenate(( np.array([m]) , np.array([W]), np.array([B]), 

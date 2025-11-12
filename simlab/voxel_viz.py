@@ -9,7 +9,7 @@ from sensor_msgs.msg import PointCloud2
 import pyoctomap
 import trimesh
 from ament_index_python.packages import get_package_share_directory
-from mesh_utils import collect_env_meshes, conc_env_trimesh, points_to_cloud2, _parse_urdf_no_ros2_control
+from mesh_utils import collect_env_meshes, conc_env_trimesh, points_to_cloud2
 
 class VoxelVizNode(Node):
     def __init__(self):

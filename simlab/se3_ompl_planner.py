@@ -18,6 +18,43 @@ X_MIN, X_MAX = -10000.0, 10000.0
 Y_MIN, Y_MAX = -10000.0, 10000.0
 Z_MIN, Z_MAX = -10000.0, 0.0
 
+def _resample_by_distance(xyz_np, quat_np, spacing_m=0.20, max_points=2000):
+    """
+    Resample path at approximately fixed translation spacing.
+    xyz_np:  (N, 3)
+    quat_np: (N, 4) wxyz
+    Returns xyz_rs, quat_rs with first and last included.
+    """
+    if xyz_np.shape[0] <= 2 or spacing_m <= 0:
+        return xyz_np, quat_np
+
+    # cumulative translation distance
+    diffs = np.linalg.norm(np.diff(xyz_np, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(diffs)])
+    total = float(cum[-1])
+
+    if total == 0.0:
+        return xyz_np[:1], quat_np[:1]
+
+    # target distances, always include 0 and total
+    targets = np.arange(0.0, total, spacing_m)
+    if targets.size == 0 or targets[-1] < total:
+        targets = np.concatenate([targets, [total]])
+
+    # map target distances to indices in the dense path
+    idx = np.searchsorted(cum, targets, side="left")
+    idx = np.clip(idx, 0, len(cum) - 1)
+
+    # enforce uniqueness and max size
+    idx = np.unique(idx)
+    if idx.size > max_points:
+        stride = int(np.ceil(idx.size / max_points))
+        idx = idx[::stride]
+        if idx[-1] != len(cum) - 1:
+            idx = np.concatenate([idx, [len(cum) - 1]])
+
+    return xyz_np[idx], quat_np[idx]
+
 
 def _valid_with_fcl(rclpy_node:Node, fcl_world:FCLWorld, safety_margin:float, state):
     x, y, z = state.getX(), state.getY(), state.getZ()
@@ -47,6 +84,9 @@ def plan_se3_path(
     time_limit=0.75,
     fcl_world=None,
     safety_margin=0.0,
+    spacing_m=0.20,           # new: desired waypoint spacing in meters
+    dense_interpolation=400,  # new: dense samples before distance resampling
+    max_points=2000           # new: cap to avoid flooding downstream
 ):
     """
     Return dict with keys xyz, quat_wxyz, count.
@@ -106,21 +146,31 @@ def plan_se3_path(
         }
 
     path = ss.getSolutionPath()
-    path.interpolate(50)
+    # Densify first for a smoother arc length estimate
+    path.interpolate(int(dense_interpolation))
 
-    # collect path
-    xyz = []
-    quat_wxyz = []
+    # Collect the dense path
+    xyz_dense, quat_dense = [], []
     for k in range(path.getStateCount()):
         st = path.getState(k)
         q = st.rotation()
-        xyz.append([st.getX(), st.getY(), st.getZ()])
-        quat_wxyz.append([q.w, q.x, q.y, q.z])
+        xyz_dense.append([st.getX(), st.getY(), st.getZ()])
+        quat_dense.append([q.w, q.x, q.y, q.z])
+
+    xyz_dense = np.asarray(xyz_dense, float)
+    quat_dense = np.asarray(quat_dense, float)
+
+    # Resample at fixed spatial spacing to keep PID errors modest
+    xyz_rs, quat_rs = _resample_by_distance(
+        xyz_dense, quat_dense,
+        spacing_m=float(spacing_m),
+        max_points=int(max_points)
+    )
 
     return {
-        "xyz": np.asarray(xyz, float),
-        "quat_wxyz": np.asarray(quat_wxyz, float),
-        "count": path.getStateCount(),
-        "status":True,
-        "message":"Planner found solution"
+        "xyz": xyz_rs,
+        "quat_wxyz": quat_rs,
+        "count": int(xyz_rs.shape[0]),
+        "status": True,
+        "message": f"Planner found solution with {xyz_rs.shape[0]} waypoints at ~{spacing_m} m spacing"
     }

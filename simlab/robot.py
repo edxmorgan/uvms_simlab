@@ -35,33 +35,8 @@ from typing import Sequence, Dict
 from control_msgs.msg import DynamicInterfaceGroupValues
 from std_msgs.msg import Float64MultiArray
 from controller_msg import FullRobotMsg
-from estimate import SerialLinksDynamicEstimator
-from estimate import MarineVehicleEstimator
-from estimate import EWUncertainty, EWErrorMetrics
 from controllers import LowLevelController
-from liecasadi import SE3, SE3Tangent, S1, S1Tangent
-from collections import deque
-
-class Ring:
-    def __init__(self, maxlen):
-        self.buf = deque(maxlen=maxlen)
-
-    def append(self, x):
-        was_full = len(self.buf) == self.buf.maxlen
-        self.buf.append(x)
-        return was_full
-
-    def is_full(self):
-        return len(self.buf) == self.buf.maxlen
-
-    def fill_ratio(self):
-        return len(self.buf) / self.buf.maxlen
-
-    def as_vstack(self):
-        return np.vstack(list(self.buf))
-
-    def __len__(self):
-        return len(self.buf)
+from liecasadi import SE3, S1
     
 class PS4Controller(Controller):
     def __init__(self, ros_node, prefix, **kwargs):
@@ -414,100 +389,6 @@ class Manipulator(Base):
         self.dq_command = [0.0, 0.0, 0.0, 0.0]
         self.ddq_command = [0.0, 0.0, 0.0, 0.0]
 
-        theta_prev = np.array([ 1.94000000e-01,  1.89269857e-02,  1.29958327e-02,  1.92826734e-02,
-                1.70332778e-02,  1.85707491e-02,  3.38742861e-03, -1.45044739e-03,
-                1.07407291e-03, -4.16794673e-04,  9.60009605e-01,  8.77084974e-01,
-                4.29000000e-01, -6.82922902e-03,  2.91162110e-02,  2.80386073e-02,
-                3.99924053e-02,  4.98000396e-02,  2.39434153e-02, -8.72099542e-03,
-                2.28957850e-02,  1.01441651e-02,  2.10688822e+00,  8.13858996e-02,
-                1.15000000e-01,  6.58255578e-03,  1.14735347e-02,  9.48787928e-03,
-                5.85331737e-02,  1.42889470e-01,  1.94501826e-01, -8.72523666e-02,
-                1.87521719e-02,  1.10696098e-02,  8.37994156e-01,  2.92171031e-02,
-                3.33000000e-01,  2.96542838e-03,  1.34841459e-02,  8.47960624e-03,
-                2.80343236e-02,  2.27215753e-02,  1.58212231e-02, -4.56922163e-03,
-                2.33185226e-03, -6.25990223e-03,  3.37566423e-01,  5.66586894e-02])
-
-
-        fixed_blocks = {
-            3: np.array([0.333, 0.00812305, 0.0197926, -0.0332988,
-                        0.0371459, 0.0557153, 0.0318996,
-                        -0.006127, -0.0168061, -0.00987941,
-                        0.28743, 0.346754]),
-            2: np.array([0.115, -0.00574854, 0.0114983, 0.0115,
-                         0.279322, 0.00154219, 0.278402, 
-                         0.00314941, 0.000618867, -0.00588411,
-                         1.01562, 0.0332583]),
-            1: np.array([0.429, -0.0418153, 0.0255531, -0.000997896,
-                         0.833981, 1.45351, 0.915332, 
-                         0.0362388, -0.723757, 0.0295013,
-                         1.3938, 0.43046]),
-        }
-
-# Final parameters for joint 1 at t=24.5001, ros_time=1757795267.349725:
-#   m1: 0.429  CI95 [0.428996, 0.429004]
-#   m*rcx1: -0.0418153  CI95 [-0.0425308, -0.0410997]
-#   m*rcy1: 0.0255531  CI95 [0.0228927, 0.0282135]
-#   m*rcz1: -0.000997896  CI95 [-0.00241596, 0.000420166]
-#   Ixx1: 0.833981  CI95 [0.809236, 0.858727]
-#   Iyy1: 1.45351  CI95 [1.42534, 1.48167]
-#   Izz1: 0.915332  CI95 [0.89469, 0.935974]
-#   Ixy1: 0.0362388  CI95 [0.0353139, 0.0371636]
-#   Ixz1: -0.723757  CI95 [-0.738847, -0.708667]
-#   Iyz1: 0.0295013  CI95 [0.0284411, 0.0305615]
-#   fv1: 1.3938  CI95 [1.38139, 1.4062]
-#   fs1: 0.43046  CI95 [0.422955, 0.437966]
-
-# Final parameters for joint 2 at t=29.5999, ros_time=1757793979.095591:
-#   m2: 0.115  CI95 [0.114998, 0.115002]
-#   m*rcx2: -0.00574854  CI95 [-0.00618164, -0.00531544]
-#   m*rcy2: 0.0114983  CI95 [0.0114961, 0.0115006]
-#   m*rcz2: 0.0115  CI95 [0.0114371, 0.0115629]
-#   Ixx2: 0.279322  CI95 [0.274057, 0.284587]
-#   Iyy2: 0.00154219  CI95 [-0.00319455, 0.00627893]
-#   Izz2: 0.278402  CI95 [0.271863, 0.284941]
-#   Ixy2: 0.00314941  CI95 [-0.00236994, 0.00866876]
-#   Ixz2: 0.000618867  CI95 [-9.05146e-05, 0.00132825]
-#   Iyz2: -0.00588411  CI95 [-0.00654028, -0.00522795]
-#   fv2: 1.01562  CI95 [1.00944, 1.02179]
-#   fs2: 0.0332583  CI95 [0.0316651, 0.0348515]
-
-# Final parameters for joint 3 at t=19.3499, ros_time=1757792872.675372:
-#   m3: 0.333  CI95 [0.332997, 0.333003]
-#   m*rcx3: 0.00812305  CI95 [0.00755143, 0.00869468]
-#   m*rcy3: 0.0197926  CI95 [0.019217, 0.0203682]
-#   m*rcz3: -0.0332988  CI95 [-0.0387932, -0.0278043]
-#   Ixx3: 0.0371459  CI95 [0.0366409, 0.037651]
-#   Iyy3: 0.0557153  CI95 [0.0526413, 0.0587893]
-#   Izz3: 0.0318996  CI95 [0.0301893, 0.0336099]
-#   Ixy3: -0.006127  CI95 [-0.0064659, -0.0057881]
-#   Ixz3: -0.0168061  CI95 [-0.0189188, -0.0146934]
-#   Iyz3: -0.00987941  CI95 [-0.0103114, -0.00944738]
-#   fv3: 0.28743  CI95 [0.283938, 0.290923]
-#   fs3: 0.346754  CI95 [0.316089, 0.37742]
-
-        # Estimator and ring buffers
-        self.horizon_steps = 840 # number of time steps to stack
-        self.n_params = 48
-        assert self.n_params == theta_prev.shape[0], "manipulator theta_prev == manipulator n_params"
-        self.manipulator_estimator = SerialLinksDynamicEstimator(dof=4,
-                                                                  horizon_steps=self.horizon_steps,
-                                                                  n_params=self.n_params,
-                                                                    theta_prev=theta_prev, 
-                                                                    fixed_blocks=fixed_blocks)
-
-        self.manip_uncert = EWUncertainty(dim=self.n_params, alpha=0.05, eps=1e-8, jitter=1e-12)
-        # Online error metrics for 4 joint torques
-        self.manip_err_metrics = EWErrorMetrics(n_outputs=4, alpha=0.5)
-
-        # Each time step we will append a 4 x p block for each active robot
-        # We stack across time, not across robots, so we sum all robots into one step
-        # Y_rows_buffer holds rows shaped (4, p)
-        # tau_rows_buffer holds rows shaped (4, 1)
-        self.Y_rows_buffer = Ring(maxlen=self.horizon_steps)
-        self.tau_rows_buffer = Ring(maxlen=self.horizon_steps)
-        self.has_intialize_manipulator_estimator = False
-
-
     def update_state(self, msg: DynamicJointState):
         self.q = self.get_interface_value(
             msg,
@@ -609,8 +490,7 @@ class Robot(Base):
     def __init__(self, node: Node,
                   k_robot, 
                   n_joint, 
-                  prefix, 
-                  initial_ref_pos, 
+                  prefix,
                   record=False,  
                   controller='pid'):
         self.planner = None
@@ -646,44 +526,11 @@ class Robot(Base):
 
         vehicle_J_path = os.path.join(package_share_directory, 'vehicle/J_uv.casadi')
 
-        vehicle_regressor_path = os.path.join(package_share_directory, 'vehicle/vehicle_id_Y.casadi')
-        manipulator_regressor_path = os.path.join(package_share_directory, 'manipulator/arm_id_Y.casadi')
-
         self.fk_eval = ca.Function.load(fk_path) # differential inverse kinematics
         # also set a class attribute fk_eval so it can be shared
         if not hasattr(Robot, "fk_eval_cls"):
             Robot.fk_eval_cls = self.fk_eval
         self.vehicle_J = ca.Function.load(vehicle_J_path)
-        self.vehicle_Y = ca.Function.load(vehicle_regressor_path)
-        self.manipulator_Y = ca.Function.load(manipulator_regressor_path)
-
-
-        m_X_du, m_Y_dv, m_Z_dw = 50, 50, 20
-        I_x_K_dp, I_y_M_dq, I_z_N_dr = 0.5, 0.5, 0.5
-        vehicle_initial_thet = np.array([m_X_du, m_Y_dv, m_Z_dw,
-                        0.0, 0.0, 0.0, 0.0, 
-                        I_x_K_dp, I_y_M_dq, I_z_N_dr, 
-                        0, 0, 0, 0 , 0, 
-                        -80,-80,-150,-5,-5,-5, 
-                        0,0,0,0,0,0])
-
-        self.vehicle_n_params = 27
-        assert self.vehicle_n_params == vehicle_initial_thet.shape[0], "vehicle theta_prev == vehicle n_params"
-        self.vehicle_n_horizon_steps = 840
-        self.v_c = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # current velocity 
-        self.vehicle_estimator =MarineVehicleEstimator(6, self.vehicle_n_params, self.vehicle_n_horizon_steps, vehicle_initial_thet)
-
-        # Online error metrics for 6 dof
-        self.vehicle_err_metrics = EWErrorMetrics(n_outputs=6, alpha=0.5)
-        # Each time step we will append a 6 x p block for each active robot
-        # We stack across time, not across robots, so we sum all robots into one step
-        # Y_rows_buffer holds rows shaped (6, p)
-        # tau_rows_buffer holds rows shaped (6, 1)
-        self.vehicle_Y_rows_buffer = Ring(maxlen=self.vehicle_n_horizon_steps)
-        self.vehicle_tau_rows_buffer = Ring(maxlen=self.vehicle_n_horizon_steps)
-        self.has_intialize_vehicle_estimator = False
-        self.vehicle_uncert = EWUncertainty(dim=self.vehicle_n_params, alpha=0.05, eps=1e-8, jitter=1e-12)
-
         self.node = node
         self.sensors = [
             Axis_Interface_names.imu_roll,
@@ -767,12 +614,8 @@ class Robot(Base):
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=10
         )
-        self.path_publisher = self.node.create_publisher(Path, f'/{self.prefix}desiredPath', qos_profile)
-        self.trajectory_path_publisher = self.node.create_publisher(Path, f'/{self.prefix}robotPath', qos_profile)
-        self.gt_trajectory_path_publisher = self.node.create_publisher(Path, f'/{self.prefix}gtPath', qos_profile)
 
-        self.path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}desiredOpsPath', qos_profile)
-        self.trajectory_path_ops_publisher = self.node.create_publisher(Path, f'/{self.prefix}robotOpsPath', qos_profile)
+        self.trajectory_path_publisher = self.node.create_publisher(Path, f'/{self.prefix}robotPath', qos_profile)
 
         self.mountPitch_publisher_ = self.node.create_publisher(Float32, '/alpha/cameraMountPitch', 10)
         self.light_publisher_ = self.node.create_publisher(Float32, '/alpha/lights', 10)
@@ -792,30 +635,26 @@ class Robot(Base):
             f"manipulation_effort_controller_{prefix}/commands",
             qos_profile
         )        
-        self.ref_acc = np.zeros(10)
-        self.ref_vel = np.zeros(10)
-        self.ref_pos = initial_ref_pos
-        self.velocity_yaw = None
+        # self.ref_acc = np.zeros(10)
+        # self.ref_vel = np.zeros(10)
+        # self.ref_pos = initial_ref_pos
+        # self.velocity_yaw = None
 
        # Initialize path poses
-        self.path_poses = []
+        # self.path_poses = []
         self.traj_path_poses = []
-        self.gt_traj_path_poses = []
+        # self.gt_traj_path_poses = []
 
 
-        self.MAX_POSES = 10000
+        # self.MAX_POSES = 10000
 
-        # robot trajectory
-        self.trajectory_twist = []
-        self.trajectory_poses = []
+        # # robot trajectory
+        # self.trajectory_twist = []
+        # self.trajectory_poses = []
 
         self.record = record
 
         self.initiaize_data_writer()
-
-         # Estimation logging placeholders
-        self.manipulator_estimation_info = None
-        self.vehicle_estimation_info = None
 
         self.node_name = node.get_name()
         # if self.node_name in ['joystick_controller','']:
@@ -842,43 +681,35 @@ class Robot(Base):
         self.mocap_latest = [float(p.x), float(p.y), float(p.z),
                             float(q.w), float(q.x), float(q.y), float(q.z)]
 
-
     def compute_manifold_errors(self):
         st = self.get_state()
 
-        goal_xyz, goal_quat_xyzw = self.final_goal
+        goal_xyz, goal_quat_xyz = self.final_goal
+
+        X_goal_des = list(goal_xyz) + list(goal_quat_xyz)
 
         # vehicle part
-        x_curr = np.asarray(st["pose"], dtype=float)
-        x_wp_des  = np.asarray(self.pose_command, dtype=float)
+        X_curr = np.asarray(st["pose"], dtype=float)
+        X_wp_des  = np.asarray(self.pose_command, dtype=float)
 
         def rpy_to_xyzw(rpy):
             return R.from_euler("xyz", rpy, degrees=False).as_quat()
 
-        X_curr = SE3(pos=x_curr[:3], xyzw=rpy_to_xyzw(x_curr[3:6]))
-        X_wp_des  = SE3(pos=x_wp_des[:3],  xyzw=rpy_to_xyzw(x_wp_des[3:6]))
-        X_goal_des  = SE3(pos=goal_xyz,  xyzw=goal_quat_xyzw)
+        err_wp_se3 = (X_wp_des - X_curr)
+        err_wp_se3_trans = np.abs(err_wp_se3[:3])
+        err_wp_se3_rotation = np.abs(err_wp_se3[3:])
 
-
-        err_wp_se3 = (X_wp_des - X_curr).exp()
-        err_wp_se3_trans = np.abs(err_wp_se3.translation()).flatten().tolist()
-        err_wp_se3_rotation = np.abs(err_wp_se3.rotation().as_euler()).flatten().tolist()
-
-        err_goal_se3 = (X_goal_des - X_curr).exp()
-        err_goal_se3_trans = np.abs(err_goal_se3.translation()).flatten().tolist()
-        err_goal_se3_rotation = np.abs(err_goal_se3.rotation().as_euler()).flatten().tolist()
+        err_goal_se3 = (X_goal_des - X_curr)
+        err_goal_se3_trans = np.abs(err_goal_se3[:3])
+        err_goal_se3_rotation = np.abs(err_goal_se3[3:])
 
         # manipulator part, build S1 objects, subtract per joint, then extract scalar tangent
-        q_curr = np.asarray(st["q"], dtype=float)
-        q_des  = np.asarray(self.arm.q_command, dtype=float)
+        q_curr = np.asarray(st["q"], dtype=float).tolist()
+        q_des  = np.asarray(self.arm.q_command, dtype=float).tolist()
 
-        X_m_curr = [S1(float(qc)) for qc in q_curr]
-        X_m_des  = [S1(float(qd)) for qd in q_des]
-
-        err_s1 = [np.abs((Xd - Xc).exp().angle) for Xd, Xc in zip(X_m_des, X_m_curr)]  # list of S1Tangent
+        err_s1 = [np.abs((Xd - Xc)) for Xd, Xc in zip(q_des, q_curr)]  # list of S1Tangent
 
         return err_wp_se3_trans, err_wp_se3_rotation, err_s1 , err_goal_se3_trans, err_goal_se3_rotation
-
 
     def start_joystick(self, device_interface):
         # Shared variables updated by the PS4 controller callbacks.
@@ -1000,64 +831,15 @@ class Robot(Base):
         xq['sim_time'] = self.sim_time
         xq['prefix'] = self.prefix
         xq['raw_sensor_readings'] = self.sensor_reading
-        xq['mocap'] = self.mocap_latest  # add this line
+        xq['mocap'] = self.mocap_latest
         # self.node.get_logger().info(f"body forces {xq['raw_sensor_readings']}")
         return xq
-
-    def to_body_velocity(self, ned_vel, pose):
-        velocity_body = copy.copy(ned_vel)
-        J_UV_REF = self.vehicle_J(pose[3:6])
-        velocity_body[:6] = np.linalg.inv(J_UV_REF.full())@ned_vel[:6]
-        return velocity_body
 
     def to_ned_velocity(self, body_vel, pose):
         velocity_ned = copy.copy(body_vel)
         J_UV_REF = self.vehicle_J(pose[3:6])
         velocity_ned[:6] = J_UV_REF.full()@body_vel[:6]
         return velocity_ned
-        
-    def set_robot_goals(self, desired_ned_vel, desired_ned_pos):
-        self.ref_ned_vel = desired_ned_vel
-        self.ref_vel = self.to_body_velocity(desired_ned_vel, desired_ned_pos)
-        self.ref_pos = desired_ned_pos
-
-        # Accumulate reference trajectory
-        self.trajectory_twist.append(self.ref_vel.tolist().copy())  # Append a copy of the reference velocity
-        self.trajectory_poses.append(self.ref_pos.copy())
-
-        self.goal = dict()
-        self.goal['ref_acc'] = self.ref_acc.tolist()
-        self.goal['ref_vel'] = self.trajectory_twist[-1]
-        self.goal['ref_pos'] = self.trajectory_poses[-1]
-
-    def get_robot_goals(self, ref_type):
-        return self.goal.get(ref_type)
-
-    def publish_reference_path(self):
-        # Publish the reference path to RViz
-        path_msg = Path()
-        path_msg.header.stamp = self.node.get_clock().now().to_msg()
-        path_msg.header.frame_id = f"{self.prefix}map"  # Set to robot map frame
-
-        # Create PoseStamped from ref_pos
-        pose = PoseStamped()
-        pose.header = path_msg.header
-        pose.pose.position.x = float(self.ref_pos[0])
-        pose.pose.position.y = -float(self.ref_pos[1])
-        pose.pose.position.z = -float(self.ref_pos[2])
-        pose.pose.orientation.w = 1.0  # No rotation
-        pose.pose.orientation.x = 0.0  # No rotation
-        pose.pose.orientation.y = 0.0  # No rotation
-        pose.pose.orientation.z = 0.0  # No rotation
-
-        # Accumulate poses
-        self.path_poses.append(pose)
-        path_msg.poses = self.path_poses
-
-        # Limit the number of poses
-        if len(self.path_poses) > self.MAX_POSES:
-            self.path_poses.pop(0)
-        self.path_publisher.publish(path_msg)
 
     def publish_robot_path(self):
         # Publish the robot trajectory path to RViz
@@ -1078,40 +860,6 @@ class Robot(Base):
         tra_path_msg.poses = self.traj_path_poses
 
         self.trajectory_path_publisher.publish(tra_path_msg)
-
-    def publish_gt_path(self):
-        gt_info = self.gt_measurements
-        # Publish the gt trajectory path to RViz
-        gt_tra_path_msg = Path()
-        gt_tra_path_msg.header.stamp = self.node.get_clock().now().to_msg()
-        gt_tra_path_msg.header.frame_id = f"{self.prefix}map"  # Set to your appropriate frame
-
-        # Create PoseStamped from ref_pos
-        gt_traj_pose = PoseStamped()
-        gt_traj_pose.header = gt_tra_path_msg.header
-        gt_traj_pose.pose.position.x = float(gt_info[0])
-        gt_traj_pose.pose.position.y = -float(gt_info[1])
-        gt_traj_pose.pose.position.z = -float(gt_info[2])
-
-        r = gt_info[3]
-        p = gt_info[4]
-        y = gt_info[5]
-
-        # Convert RPY to quaternion using SciPy
-        rotation = R.from_euler('xyz', [r, p, y], degrees=False)
-        quat = rotation.as_quat()  # SciPy returns [x, y, z, w]
-
-        # Assign quaternion to the pose orientation
-        gt_traj_pose.pose.orientation.x = quat[0]
-        gt_traj_pose.pose.orientation.y = quat[1]
-        gt_traj_pose.pose.orientation.z = quat[2]
-        gt_traj_pose.pose.orientation.w = quat[3]
-
-        # Accumulate poses
-        self.gt_traj_path_poses.append(gt_traj_pose)
-        gt_tra_path_msg.poses = self.gt_traj_path_poses
-
-        self.gt_trajectory_path_publisher.publish(gt_tra_path_msg)
 
 
     def orient_towards_velocity(self):
@@ -1140,13 +888,6 @@ class Robot(Base):
         # Adjust desired_yaw to ensure the shortest rotation path
         adjusted_desired_yaw = current_yaw + angle_diff
         return adjusted_desired_yaw
-
-    def quaternion_to_euler(self, orientation):
-        quat = [orientation.x, orientation.y, orientation.z, orientation.w]
-        r = R.from_quat(quat)
-        roll, pitch, yaw = r.as_euler('xyz', degrees=False)
-        return roll, pitch, yaw
-
 
     def initiaize_data_writer(self):
         if self.record:
@@ -1275,364 +1016,3 @@ class Robot(Base):
 
     def listener_callback(self, msg: DynamicJointState):
         self.update_state(msg)
-
-    def estimate_manipulator_parameter(self):
-        try:
-            Y_row = self.manipulator_Y(
-                self.arm.filtered_q,
-                self.arm.filtered_dq,
-                self.arm.estimated_ddq,
-                self.vec_g,
-                self.base_pose,
-                self.world_pose
-            ).full()  # expected 4 x p
-            tau_row = np.array(self.arm.effort).reshape(-1, 1)   # 4 x 1  
-            # Append this time step
-            Y_was_full = self.arm.Y_rows_buffer.append(Y_row)
-            tau_was_full = self.arm.tau_rows_buffer.append(tau_row)
-
-            Y_big = self.arm.Y_rows_buffer.as_vstack()
-            tau_big = self.arm.tau_rows_buffer.as_vstack().ravel()
-            assert Y_big.shape[0] == tau_big.size, "tau size must equal Y rows"
-
-            # self.node.get_logger().info(f"Y_big shape {Y_big.shape} {Y_was_full}, tau_big shape {tau_big.shape} {tau_was_full}")
-            if Y_was_full and tau_was_full:
-                theta_hat, v, w, solve_time = self.arm.manipulator_estimator.estimate_link_physical_parameters(Y_big, tau_big, True)
-                self.manipulator_estimation_info = (Y_big, tau_big, theta_hat, v, w, solve_time)
-                pi_prev = getattr(self, "last_manip_theta", theta_hat).ravel()
-                self.arm.manip_uncert.update(pi_prev=pi_prev, w_t=w.ravel(), pi_t=theta_hat.ravel())
-                self.last_manip_theta = theta_hat.ravel()
-                if not self.arm.has_intialize_manipulator_estimator:
-                    self.node.get_logger().info(f"\033[35mManipulator Warm Start complete\033[0m")
-                    self.arm.has_intialize_manipulator_estimator = True
-        except Exception as e:
-            self.node.get_logger().warn(f"Failed to compute theta from Y or tau for {self.robot_name}: {e}")
-
-    def _manip_param_names(self):
-        """Order matches your estimator layout, 4 joints, 12 params each."""
-        base = []
-        for j in range(4):
-            base += [
-                f"m{j}", f"m*rcx{j}", f"m*rcy{j}", f"m*rcz{j}",
-                f"Ixx{j}", f"Iyy{j}", f"Izz{j}", f"Ixy{j}", f"Ixz{j}", f"Iyz{j}",
-                f"fv{j}", f"fs{j}",
-            ]
-        return base
-
-    def _with_suffix(self, names, suffix):
-        return [f"{n}_{suffix}" for n in names]
-
-    def joint_eigs(self, th_block):
-        m, mcx, mcy, mcz = th_block[0], th_block[1], th_block[2], th_block[3]
-        Ixx, Iyy, Izz = th_block[4], th_block[5], th_block[6]
-        Ixy, Ixz, Iyz = th_block[7], th_block[8], th_block[9]
-
-        mc = np.array([mcx, mcy, mcz], float)
-        I_bar = np.array([[Ixx, Ixy, Ixz],
-                        [Ixy, Iyy, Iyz],
-                        [Ixz, Iyz, Izz]], float)
-
-        J_ul = 0.5 * np.trace(I_bar) * np.eye(3) - I_bar
-        J = np.block([[J_ul, mc.reshape(3, 1)],
-                    [mc.reshape(1, 3), np.array([[m]])]])
-
-        eigJ = np.linalg.eigvalsh(J)   # 4 eigenvalues, ascending
-        return eigJ
-
-    def initialize_manipulator_estimator_writer(self):
-        # Create a timestamp string
-        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-
-        # Create a folder with the timestamp as its name
-        folder_path = os.path.join(os.getcwd(), timestamp_str)
-        os.makedirs(folder_path, exist_ok=True)
-
-        # Create a timestamped filename for the CSV
-        filename = f"{timestamp_str}_{self.prefix}_manipulator_estimates.csv"
-        file_path = os.path.join(folder_path, filename)
-
-        # Open the CSV file and prepare to write data
-        self.manipulator_estimates_csv_file = open(file_path, 'w', newline='')
-        self.csv_writer = csv.writer(self.manipulator_estimates_csv_file)
-
-        # time columns
-        time_cols = ["t", "ros_time"]
-        
-        # Build header: theta, sigma, ci lower, ci upper
-        base = self._manip_param_names()                         # length 48
-        cols_sigma = self._with_suffix(base, "sigma")            # length 48
-        cols_ci_lo = self._with_suffix(base, "ci_lo")            # length 48
-        cols_ci_hi = self._with_suffix(base, "ci_hi")            # length 48
-
-        # error metrics per joint
-        metrics = ["mse", "mae", "rmse"]
-        solve_time_col = ["solve_time"]
-        tau_trajectory_cols = ["tau0", "tau1", "tau2", "tau3", "tau_fit0", "tau_fit1", "tau_fit2", "tau_fit3"]
-        eig_cols = [f"eigJ_joint{j}_e{k}" for j in range(4) for k in range(1, 5)]
-        metric_cols = []
-        unc_cols = [f"tau_fit_sigma{j}" for j in range(4)] + [f"tau_pred_sigma{j}" for j in range(4)]
-
-        for j in range(4):
-            for m in metrics:
-                metric_cols.append(f"{m}_joint{j}")
-
-        columns = (
-            time_cols
-              + base + cols_sigma + cols_ci_lo + cols_ci_hi 
-              + metric_cols + solve_time_col 
-              + tau_trajectory_cols + unc_cols + eig_cols)
-        self.csv_writer.writerow(columns)
-
-    def pretty_log_manipulator_params(self):
-        Y_big, tau_big, theta_hat, v, w, solve_time = self.manipulator_estimation_info
-
-        # Fit on the stacked block
-        tau_fit_big = Y_big @ theta_hat                  # shape (T*4, 1)
-        T = self.arm.horizon_steps
-        tau_fit = tau_fit_big.reshape(T, 4)
-        tau = tau_big.reshape(T, 4)
-
-        # latest residual for online metrics
-        r_last = tau[-1, :] - tau_fit[-1, :]
-        self.arm.manip_err_metrics.update(r_last)
-        m_summ = self.arm.manip_err_metrics.summary()
-        mse_ew, mae_ew, rmse_ew = m_summ["mse"], m_summ["mae"], m_summ["rmse"]
-
-        # Uncertainty summary
-        summ = self.arm.manip_uncert.summary(z=1.96)
-        sigma = np.asarray(summ["sigma"]).reshape(-1)     # (48,)
-        ci = np.asarray(summ["ci95"])                     # (48, 2)
-        ci_lower = ci[:, 0].reshape(-1)
-        ci_upper = ci[:, 1].reshape(-1)
-
-        # latest 4 rows of the stacked regressor correspond to the current sample for joints 0..3
-        # Y_big shape is (T*4, p). Take the last 4 rows
-        Y_last = Y_big[-4:, :]                       # shape (4, p)
-
-        # parameter covariance
-        Sigma_theta = self.arm.manip_uncert.parameter_covariance()   # shape (p, p)
-
-        # propagate to torque fit covariance, 4x4
-        Sigma_tau_fit = Y_last @ Sigma_theta @ Y_last.T
-
-        # standard deviation per joint from the diagonal
-        tau_fit_sigma = np.sqrt(np.clip(np.diag(Sigma_tau_fit), 0.0, np.inf))   # shape (4,)
-
-        # predictive torque sigma adds residual noise variance from online metrics
-        sigma_noise = np.sqrt(np.maximum(m_summ["mse"], 0.0))                   # shape (4,)
-        tau_pred_sigma = np.sqrt(tau_fit_sigma**2 + sigma_noise**2)             # shape (4,)
-
-        # Parameters
-        theta_row = np.asarray(theta_hat).reshape(-1)     # (48,)
-
-        tau_last     = tau[-1, :].reshape(-1)        # shape (4,)
-        tau_fit_last = tau_fit[-1, :].reshape(-1)    # shape (4,)
-
-        th = np.asarray(theta_hat, float).reshape(-1)
-        group_len = 12
-        eig_all = []
-        for j in range(4):
-            s, e = j * group_len, (j + 1) * group_len
-            eigJ = self.joint_eigs(th[s:e])
-            eig_all.extend([float(x) for x in eigJ])
-        # times
-        t_sim = float(self.sim_time)
-        t_ros = float(self.node.get_clock().now().nanoseconds) * 1e-9
-        # Assemble row in the same order as header,
-        # where header has: params, sigma, ci_lo, ci_hi, mse_joint0..3, mae_joint0..3, rmse_joint0..3
-        row_data = (
-            [t_sim, t_ros]
-            + theta_row.tolist()
-            + sigma.tolist()
-            + ci_lower.tolist()
-            + ci_upper.tolist()
-            + mse_ew.tolist()
-            + mae_ew.tolist()
-            + rmse_ew.tolist()
-            + [solve_time]
-            + tau_last.tolist()
-            + tau_fit_last.tolist()
-            + tau_fit_sigma.tolist()
-            + tau_pred_sigma.tolist()
-            + eig_all   # 16 values total, 4 per joint
-        )
-
-        if all(val == 0 for val in row_data):
-            return
-
-        self.csv_writer.writerow(row_data)
-        self.manipulator_estimates_csv_file.flush()
-
-
-    def close_manipulator_estimates_csv(self):
-        # Close the CSV file when the node is destroyed
-        self.manipulator_estimates_csv_file.close()
-
-    def estimate_vehicle_parameter(self):
-        try:
-            eul = self.state_estimate_readings[3:6]
-            x_nb = self.state_estimate_readings[10:16]
-            dx_nb = self.state_estimate_readings[16:22]
-
-            Y_row = self.vehicle_Y(eul, x_nb, dx_nb, self.v_c).full()  # expected 4 x p
-
-            τ_row = np.array(self.body_forces).reshape(-1, 1)   # 4 x 1 
-            # Append this time step
-            Y_was_full = self.vehicle_Y_rows_buffer.append(Y_row)
-            tau_was_full = self.vehicle_tau_rows_buffer.append(τ_row)
-
-            Y_big = self.vehicle_Y_rows_buffer.as_vstack()
-            tau_big = self.vehicle_tau_rows_buffer.as_vstack().ravel()
-            assert Y_big.shape[0] == tau_big.size, "tau size must equal Y rows"
-
-            # self.node.get_logger().info(f"Y_big shape {Y_big.shape} {Y_was_full}, tau_big shape {tau_big.shape} {tau_was_full}")
-            if Y_was_full and tau_was_full:
-                theta_hat, v, w, solve_time = self.vehicle_estimator.estimate_vehicle_physical_parameters(Y_big, tau_big, True)
-                self.vehicle_estimation_info = (Y_big, tau_big, theta_hat, v, w, solve_time)
-
-                pi_prev = getattr(self, "last_vehicle_theta", theta_hat).ravel()
-                self.vehicle_uncert.update(pi_prev=pi_prev, w_t=w.ravel(), pi_t=theta_hat.ravel())
-                self.last_vehicle_theta = theta_hat.ravel()
-
-                if not self.has_intialize_vehicle_estimator:
-                    self.has_intialize_vehicle_estimator = True
-        except Exception as e:
-            self.node.get_logger().warn(f"Failed to compute theta from Y or tau for {self.robot_name}: {e}")
-
-    def initialize_vehicle_estimator_writer(self):
-        # Create a timestamp string
-        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-
-        # Create a folder with the timestamp as its name
-        folder_path = os.path.join(os.getcwd(), timestamp_str)
-        os.makedirs(folder_path, exist_ok=True)
-
-        # Create a timestamped filename for the CSV
-        filename = f"{timestamp_str}_{self.prefix}_vehicle_estimates.csv"
-        file_path = os.path.join(folder_path, filename)
-
-        # Open the CSV file and prepare to write data
-        self.vehicle_estimates_csv_file = open(file_path, 'w', newline='')
-        self.csv_writer = csv.writer(self.vehicle_estimates_csv_file)
-
-        # time columns
-        time_cols = ["t", "ros_time"]
-        
-        # Build header: theta, sigma, ci lower, ci upper
-        base = [ 'm-X_du', 'm-Y_dv', 'm-Z_dw',
-            'm*z_g-X_dq', '-m*z_g+Y_dp', '-m*z_g+K_dv', 'm*z_g-M_du',
-            'I_x-K_dp', 'I_y-M_dq', 'I_z-N_dr',
-            'W', 'B', 'x_gW-x_bB', 'y_gW-y_bB', 'z_gW-z_bB',
-            'X_u', 'Y_v', 'Z_w', 'K_p', 'M_q', 'N_r',
-            'X_uu', 'Y_vv', 'Z_ww', 'K_pp', 'M_qq', 'N_rr' ]
-        
-        # Build header: theta, sigma, ci lower, ci upper
-        cols_sigma = self._with_suffix(base, "sigma")            # length 27
-        cols_ci_lo = self._with_suffix(base, "ci_lo")            # length 27
-        cols_ci_hi = self._with_suffix(base, "ci_hi")            # length 27
-
-        # error metrics per joint
-        metrics = ["mse", "mae", "rmse"]
-        solve_time_col = ["solve_time"]
-        dofs = ["x", "y", "z", "roll", "pitch", "yaw"]
-        tau_trajectory_cols = ["F_x", "F_y", "F_z", "T_roll", "T_pitch", "T_yaw",
-                               "F_x_fit", "F_y_fit", "F_z_fit", "T_roll_fit", "T_pitch_fit", "T_yaw_fit"]
-        metric_cols = []
-        unc_cols_fit_sigma = ["F_x_fit_sigma", "F_y_fit_sigma", "F_z_fit_sigma", "T_roll_fit_sigma", "T_pitch_fit_sigma", "T_yaw_fit_sigma"]
-        unc_cols_pred_sigma = ["F_x_pred_sigma", "F_y_pred_sigma", "F_z_pred_sigma", "T_roll_pred_sigma", "T_pitch_pred_sigma", "T_yaw_pred_sigma"]
-        unc_cols = unc_cols_fit_sigma + unc_cols_pred_sigma
-
-        for dof in dofs:
-            for m in metrics:
-                metric_cols.append(f"{m}_dof_{dof}")
-
-        columns = (
-            time_cols
-              + base + cols_sigma + cols_ci_lo + cols_ci_hi 
-              + metric_cols + solve_time_col 
-              + tau_trajectory_cols + unc_cols)
-
-        self.csv_writer.writerow(columns)
-
-    def pretty_print_vehicle_params(self, title="Identified vehicle parameters"):
-        """
-        Pretty print and sanity check the lumped vehicle parameters used in your regressor.
-        Expects the parameter order:
-            [ m-X_du, m-Y_dv, m-Z_dw,
-            m*z_g-X_dq, -m*z_g+Y_dp, -m*z_g+K_dv, m*z_g-M_du,
-            I_x-K_dp, I_y-M_dq, I_z-N_dr,
-            W, B, x_gW-x_bB, y_gW-y_bB, z_gW-z_bB,
-            X_u, Y_v, Z_w, K_p, M_q, N_r,
-            X_uu, Y_vv, Z_ww, K_pp, M_qq, N_rr ]
-        """
-        Y_big, tau_big, theta_hat, v, w, solve_time = self.vehicle_estimation_info
-        tau_fit_big = Y_big @ theta_hat
-        # reshape back to per joint series for plotting
-        tau_fit = tau_fit_big.reshape(self.vehicle_n_horizon_steps, 6)
-        tau = tau_big.reshape(self.vehicle_n_horizon_steps, 6)
-        # latest residual for online metrics
-        r_last = tau[-1, :] - tau_fit[-1, :]
-        self.vehicle_err_metrics.update(r_last)
-        m_summ = self.vehicle_err_metrics.summary()
-        mse_ew, mae_ew, rmse_ew = m_summ["mse"], m_summ["mae"], m_summ["rmse"]
-
-        # Uncertainty summary
-        summ = self.vehicle_uncert.summary(z=1.96)
-        sigma = np.asarray(summ["sigma"]).reshape(-1)     # (27,)
-        ci = np.asarray(summ["ci95"])                     # (27, 2)
-        ci_lower = ci[:, 0].reshape(-1)
-        ci_upper = ci[:, 1].reshape(-1)
-
-        # latest 6 rows of the stacked regressor correspond to the current sample for joints 0..3
-        # Y_big shape is (T*6, p). Take the last 6 rows
-        Y_last = Y_big[-6:, :]                       # shape (6, p)
-
-        # parameter covariance
-        Sigma_theta = self.vehicle_uncert.parameter_covariance()   # shape (p, p)
-
-        # propagate to torque fit covariance, 6x6
-        Sigma_tau_fit = Y_last @ Sigma_theta @ Y_last.T
-
-        # standard deviation per joint from the diagonal
-        tau_fit_sigma = np.sqrt(np.clip(np.diag(Sigma_tau_fit), 0.0, np.inf))   # shape (6,)
-
-        # predictive torque sigma adds residual noise variance from online metrics
-        sigma_noise = np.sqrt(np.maximum(m_summ["mse"], 0.0))                   # shape (6,)
-        tau_pred_sigma = np.sqrt(tau_fit_sigma**2 + sigma_noise**2)             # shape (6,)
-
-        # Parameters
-        theta_row = np.asarray(theta_hat).reshape(-1)     # (27,)
-
-        tau_last     = tau[-1, :].reshape(-1)        # shape (6,)
-        tau_fit_last = tau_fit[-1, :].reshape(-1)    # shape (6,)
-
-        # times
-        t_sim = float(self.sim_time)
-        t_ros = float(self.node.get_clock().now().nanoseconds) * 1e-9
-        # Assemble row in the same order as header,
-        # where header has: params, sigma, ci_lo, ci_hi, mse_joint0..3, mae_joint0..3, rmse_joint0..3
-        row_data = (
-            [t_sim, t_ros]
-            + theta_row.tolist()            
-            + sigma.tolist()
-            + ci_lower.tolist()
-            + ci_upper.tolist()
-            + mse_ew.tolist()
-            + mae_ew.tolist()
-            + rmse_ew.tolist()
-            + [solve_time]
-            + tau_last.tolist()
-            + tau_fit_last.tolist()
-            + tau_fit_sigma.tolist()
-            + tau_pred_sigma.tolist()
-        )
-
-        if all(val == 0 for val in row_data):
-            return
-
-        self.csv_writer.writerow(row_data)
-        self.vehicle_estimates_csv_file.flush()
-
-    def close_vehicle_estimates_csv(self):
-        # Close the CSV file when the node is destroyed
-        self.vehicle_estimates_csv_file.close()

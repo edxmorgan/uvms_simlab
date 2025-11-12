@@ -16,9 +16,8 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-import numpy as np
 from robot import Robot
-
+from typing import List
 ###############################################################################
 # ROS2 Node that uses the PS4 controller for ROV teleoperation.
 #
@@ -52,12 +51,10 @@ class PS4TeleopNode(Node):
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"Total number of commands: {self.total_no_efforts}")
 
-        # Initialize robots (make sure your Robot class is defined properly).
-        initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
-
-        self.robots = []
+        self.robots:List[Robot] = []
+        
         for k, (prefix, controller) in enumerate(list(zip(self.robots_prefix, self.controllers))):
-            robot_k = Robot(self, k, 4, prefix, initial_pos, self.record, controller)
+            robot_k = Robot(self, k, 4, prefix, self.record, controller)
             self.robots.append(robot_k)
 
         # Create a timer callback to publish commands at 1000 Hz.
@@ -67,7 +64,6 @@ class PS4TeleopNode(Node):
     def timer_callback(self):
         for robot in self.robots:
             robot.publish_robot_path()
-            robot.publish_gt_path()
             [surge, sway, heave, roll, pitch, yaw] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
             [e_joint, d_joint, c_joint, b_joint, a_joint] = [0.0, 0.0, 0.0, 0.0, 0.0]
 

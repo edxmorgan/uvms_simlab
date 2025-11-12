@@ -185,6 +185,19 @@ def collect_env_meshes(urdf_string: str):
     return robot_out, env_out
 
 
+def getAABB_OBB(mesh):
+    # Get the axis-aligned bounding box (AABB)
+    min_coords = mesh.bounds[0]
+    max_coords = mesh.bounds[1]
+
+    # get the oriented bounding box (OBB)
+    obb = mesh.bounding_box_oriented
+    obb_corners = trimesh.bounds.corners(obb.bounds)
+
+    AABB = min_coords, max_coords
+    OBB = obb_corners
+    return AABB, OBB
+
 def rpy_xyz_to_mat(rpy, xyz):
     T = trimesh.transformations.euler_matrix(
         rpy[0], rpy[1], rpy[2], axes="sxyz"

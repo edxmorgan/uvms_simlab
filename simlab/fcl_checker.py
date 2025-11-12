@@ -1,9 +1,8 @@
 # fcl_world.py
 import numpy as np
 import fcl
-from typing import Dict, List, Tuple
-from mesh_utils import fcl_bvh_from_mesh, collect_env_meshes
-
+from typing import Dict, Tuple
+from mesh_utils import fcl_bvh_from_mesh, collect_env_meshes, conc_env_trimesh, getAABB_OBB
 
 class FCLWorld:
     """
@@ -20,11 +19,17 @@ class FCLWorld:
         self.vehicle_radius = float(vehicle_radius)
 
         # parse URDF
-        robot_links, env_links = collect_env_meshes(urdf_string)
+        robot_mesh_infos, env_mesh_infos = collect_env_meshes(urdf_string)
+
+        # merge meshes into one Trimesh in world frame
+        env_mesh = conc_env_trimesh(env_mesh_infos)
+        AABB, OBB = getAABB_OBB(env_mesh)
+        self.min_coords, self.max_coords = AABB
+        self.obb_corners = OBB
 
         # build FCL bodies identical to your original structure
-        self.bodies_robot = self._build_fcl_bodies(robot_links, "robot")
-        self.bodies_env   = self._build_fcl_bodies(env_links,   "env")
+        self.bodies_robot = self._build_fcl_bodies(robot_mesh_infos, "robot")
+        self.bodies_env   = self._build_fcl_bodies(env_mesh_infos,   "env")
 
         # managers
         self.manager_robot = fcl.DynamicAABBTreeCollisionManager()

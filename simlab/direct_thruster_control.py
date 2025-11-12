@@ -68,12 +68,9 @@ class KeyMappingNeutralPublisher(Node):
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"Total number of commands: {self.total_no_efforts}")
 
-        # Initialize robots (make sure your Robot class is defined properly).
-        initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
-
         self.robots = []
         for k, (prefix, controller) in enumerate(list(zip(self.robots_prefix, self.controllers))):
-            robot_k = Robot(self, k, 4, prefix, initial_pos, self.record, controller)
+            robot_k = Robot(self, k, 4, prefix, self.record, controller)
             self.robots.append(robot_k)  
 
         # Define the base neutral command message.

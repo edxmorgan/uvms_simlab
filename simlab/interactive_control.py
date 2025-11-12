@@ -29,7 +29,6 @@ from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSDurabilityPolicy, QoSReli
 from robot import Robot
 import tf2_ros
 import ament_index_python
-from functools import partial
 import os
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Header
@@ -41,6 +40,8 @@ from fcl_checker import FCLWorld
 from interactive_utils import *
 from planner_markers import PathPlanner
 from frame_utils import PoseX
+from typing import List
+
 class BasicControlsNode(Node):
     def __init__(self):
         super().__init__('uvms_interactive_controls',
@@ -49,6 +50,11 @@ class BasicControlsNode(Node):
         # FCL for planning, env in world frame
         urdf_string = self.get_parameter('robot_description').get_parameter_value().string_value
         self.fcl_world = FCLWorld(urdf_string=urdf_string, world_frame='world', vehicle_radius=0.4)
+
+        self.get_logger().info(f"Minimum coordinates (min_x, min_y, min_z): {self.fcl_world.min_coords}")
+        self.get_logger().info(f"Maximum coordinates (max_x, max_y, max_z): {self.fcl_world.max_coords}")
+        self.get_logger().info(f"Oriented Bounding Box corners: {self.fcl_world.obb_corners}")
+
 
         package_share_directory = ament_index_python.get_package_share_directory('simlab')
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -130,10 +136,9 @@ class BasicControlsNode(Node):
         self.execute_handle = self.menu_handler.insert("Plan & execute", callback=self.processFeedback)
         sub_menu_handle = self.menu_handler.insert("Robots")
 
-        initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
-        self.robots = []
+        self.robots:List[Robot] = []
         for k, (prefix, controller) in enumerate(zip(self.robots_prefix, self.controllers)):
-            robot_k = Robot(self, k, 4, prefix, initial_pos, self.record, controller)
+            robot_k = Robot(self, k, 4, prefix, self.record, controller)
 
             # unique planner per robot
             robot_k.planner = PathPlanner(self, ns=f"planner/{prefix}", base_id=k)
@@ -231,7 +236,7 @@ class BasicControlsNode(Node):
         for k, robot in enumerate(self.robots):
             k_planner = robot.planner
             if robot.prefix == self.robots_prefix[self.selected_robot_index]:
-                if k_planner.planned_result != None:
+                if k_planner.planned_result and k_planner.planned_result['status']:
                     k_planner.update(
                         stamp=stamp_now,
                         frame_id=self.base_frame,
@@ -248,7 +253,7 @@ class BasicControlsNode(Node):
                 desired_body_vel = robot.body_vel_command + robot.arm.dq_command
                 robot.publish_robot_path()
 
-                if robot.final_goal is not None and k_planner.planned_result['status']:
+                if robot.final_goal is not None and k_planner.planned_result and k_planner.planned_result['status']:
                     waypoints = k_planner.planned_result["xyz"]
                     quats = k_planner.planned_result["quat_wxyz"]
 
@@ -274,6 +279,7 @@ class BasicControlsNode(Node):
 
                     # Compute current manifold errors
                     wp_err_trans, wp_err_rot, wp_err_joint, goal_err_trans, goal_err_rot = robot.compute_manifold_errors()
+                    # self.get_logger().info(f"yaw now at pos err manifold {goal_err_rot}")
                     
                     goal_xyz_error = np.linalg.norm(goal_err_trans)
 
@@ -288,6 +294,7 @@ class BasicControlsNode(Node):
 
                     # If velocity_yaw is not available, simply use the target yaw.
                     if adjusted_yaw is None:
+                        self.get_logger().info(f"adjusted_yaw is None")
                         final_yaw = rpy_cmd_ned[2]
                     else:
                         # Blend the yaw values: more weight to target_yaw as the position error decreases.
@@ -404,7 +411,7 @@ class BasicControlsNode(Node):
                     )
 
                     # Goal from the UV marker is in NWU, convert that to NED for control and save it.
-                    robot.final_goal = goal_now.get_pose(frame="NED", rot_rep="quat_xyzw")
+                    robot.final_goal = goal_now.get_pose(frame="NED", rot_rep="euler_xyz")
                     robot.wp_index = 0
    
                     k_planner = robot.planner
@@ -424,16 +431,19 @@ class BasicControlsNode(Node):
                             start_quat_wxyz=start_quat_wxyz,
                             goal_xyz=goal_xyz,
                             goal_quat_wxyz=goal_quat_wxyz,
-                            time_limit=0.2,
+                            time_limit=1.0,
                             fcl_world=self.fcl_world,
-                            safety_margin=0.2,
+                            safety_margin=0.1,
                         )
                         self.get_logger().info(
                             f"Planned path with {k_planner.planned_result['count']} states"
                         )
                     except Exception as e:
                         self.get_logger().error(f"Planner failed, {e}")
-                        k_planner.planned_result = None
+                        k_planner.planned_result = {
+                                    "status":False,
+                                    "message":"Planner did not find a solution"
+                                }
                 else:
                     # otherwise, a robot menu item was clicked
                     if feedback.menu_entry_id in self.menu_id_to_robot_index:

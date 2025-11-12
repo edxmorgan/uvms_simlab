@@ -20,10 +20,8 @@ setup(
             glob('resource/vehicle/*')
         ),
         ('lib/' + package_name, [package_name+'/robot.py']),
-        ('lib/' + package_name, [package_name+'/estimate.py']),
         ('lib/' + package_name, [package_name+'/blue_rov.py']),
         ('lib/' + package_name, [package_name+'/alpha_reach.py']),
-        ('lib/' + package_name, [package_name+'/task.py']),
         ('lib/' + package_name, [package_name+'/controller_msg.py']),
         ('lib/' + package_name, [package_name+'/controllers.py']),
         ('lib/' + package_name, [package_name+'/mesh_utils.py']),
@@ -55,11 +53,9 @@ setup(
         'console_scripts': [
             'interactive_controller = simlab.interactive_control:main',
             'joystick_controller = simlab.joystick_control:main',
-            'motion_plan_controller = simlab.motion_plan_control:main',
             'joint_controller = simlab.joint_control:main',
             'direct_thruster_controller = simlab.direct_thruster_control:main',
             'rgb2cloudpoint_publisher = simlab.rgb2cloudpoint:main',
-            'estimator_publisher = simlab.estimator:main',
             'mocap_publisher = simlab.use_mocap:main',
             'motive_publisher = simlab.sim_motive:main',
             'collision_contact_node = simlab.collision_contact:main',

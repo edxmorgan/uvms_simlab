@@ -16,11 +16,6 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-import numpy as np
-
-# Import ROS2 QoS settings and message type.
-from rclpy.qos import QoSProfile, QoSHistoryPolicy
-
 # Import your robot class
 from robot import Robot
 
@@ -41,9 +36,7 @@ class Dof_Control_Node(Node):
         self.total_no_efforts = self.no_robot * self.no_efforts
         self.get_logger().info(f"Total number of commands: {self.total_no_efforts}")
 
-        # Initialize robots (make sure your Robot class is defined properly).
-        initial_pos = np.array([0.0, 0.0, 0.0, 0, 0, 0, 3.1, 0.7, 0.4, 2.1])
-        self.robots = [Robot(self, k, 4, prefix, initial_pos, self.record) for k, prefix in enumerate(self.robots_prefix)]
+        self.robots = [Robot(self, k, 4, prefix, self.record) for k, prefix in enumerate(self.robots_prefix)]
 
         # Create a timer callback to publish commands at 1000 Hz.
         frequency = 1000  # Hz
