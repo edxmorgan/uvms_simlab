@@ -66,14 +66,6 @@ ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
     sim_robot_count:=1 task:=manual
 ```
 
-**Coverage Planning**
-
-```bash
-ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
-    use_manipulator_hardware:=false use_vehicle_hardware:=false \
-    sim_robot_count:=1 task:=coverage
-```
-
 ## Contributing 🤝
 
 PRs are welcome. Fork the repo and submit improvements.
