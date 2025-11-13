@@ -315,7 +315,7 @@ class BasicControlsNode(Node):
                     wp_rot_error = np.linalg.norm(wp_err_rot)
 
                     # Check if translation error small enough to move to next waypoint
-                    if wp_pos_error < 1e-1 and wp_rot_error < 1e-1:
+                    if wp_pos_error < 5e-1 and wp_rot_error < 5e-1:
                         if robot.wp_index < len(waypoints) - 1:
                             robot.wp_index += 1
                             # self.get_logger().info(f"{robot.prefix} → waypoint {robot.wp_index}")

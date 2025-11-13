@@ -56,8 +56,8 @@ class PS4Controller(Controller):
         self.gain = real_gain if 'real' in prefix else sim_gain
 
         # Gains for different DOFs
-        self.max_torque = self.gain * 1.5             # for surge/sway
-        self.heave_max_torque = self.gain * 1.5         # for heave (L2/R2)
+        self.max_torque = self.gain * 2.0             # for surge/sway
+        self.heave_max_torque = self.gain * 5.0         # for heave (L2/R2)
         self.orient_max_torque = self.gain * 0.8        # for roll, pitch,
         self.yaw_max_torque = self.gain * 0.4 # for yaw
 
