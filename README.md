@@ -4,7 +4,7 @@ Extension of the [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) f
 
 ## Features ⭐
 
-* 🎮 **Interactive 6 DOF RViz Markers**
+* 🌀🖱️ **Interactive 6 DOF RViz Markers**
   Direct vehicle and end effector control.
 
 * 🤖 **Self Collision Avoidance**
@@ -13,7 +13,7 @@ Extension of the [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) f
 * 🗺️ **Coverage Planning**
   Automated workspace coverage with collision handling.
 
-* 🕹️ **PS4 Teleoperation**
+* 🎮 **PS4 Teleoperation**
   Bluetooth controller support for manual operation.
 
 * 🔧 **Simulation and Hardware**
