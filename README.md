@@ -74,21 +74,8 @@ ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
     sim_robot_count:=1 task:=coverage
 ```
 
-## Folder Layout 📁
-
-```
-uvms_simlab/
-  launch/
-  simlab/
-  scripts/
-  config/
-  rviz/
-```
-
 ## Contributing 🤝
 
 PRs are welcome. Fork the repo and submit improvements.
 
 ---
-
-If you want, I can also add a banner image, GIF demos, or badges.
