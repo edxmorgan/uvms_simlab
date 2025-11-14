@@ -68,13 +68,13 @@ class BasicControlsNode(Node):
             )
         self.planner_marker_publisher = self.create_publisher(Marker, "planned_waypoints_marker", viz_qos)
 
-        # New publisher for FCL environment AABB
+        # publisher for FCL environment AABB
         self.env_aabb_pub = self.create_publisher(Marker, "fcl_environment_aabb", viz_qos)
-        self.world_frame = "world"          # change if needed
+        self.world_frame = "world" 
         self.world_bottom_frame = "world_bottom"
         self.bottom_z = None
 
-        # Example: get some parameters
+        # get some parameters
         self.no_robot = self.get_parameter('no_robot').value
         self.no_efforts = self.get_parameter('no_efforts').value
         self.robots_prefix = self.get_parameter('robots_prefix').value
@@ -104,7 +104,6 @@ class BasicControlsNode(Node):
         self.vehicle_body_hull = ConvexHull(self.rov_ellipsoid_cl_pts)
 
         # Combine clouds that represent the vehicle occupied volume
-        # Use what you already have in this node
         all_pts = np.vstack([
             np.asarray(self.rov_ellipsoid_cl_pts, dtype=float),
             np.asarray(self.workspace_pts, dtype=float)
