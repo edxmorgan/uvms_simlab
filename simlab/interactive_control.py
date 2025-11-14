@@ -225,7 +225,7 @@ class BasicControlsNode(Node):
 
         self.control_frequency = 500.0  # Hz
         self.viz_frequency = 10.0       # Hz
-        self.cloud_frequency = 50.0     # Hz
+        self.cloud_frequency = 100.0     # Hz
         self.fcl_update_frequency = 50.0  # Hz
 
         self.control_timer = self.create_timer(1.0 / self.control_frequency, self.timer_callback)

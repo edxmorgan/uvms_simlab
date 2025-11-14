@@ -3,7 +3,6 @@ import os
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from nav_msgs.msg import OccupancyGrid
 from sensor_msgs.msg import PointCloud2
 
 import pyoctomap
