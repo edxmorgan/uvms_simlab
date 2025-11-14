@@ -20,6 +20,7 @@ np.float = float  # Patch NumPy to satisfy tf_transformations' use of np.float
 import copy
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
 import casadi as ca
 from geometry_msgs.msg import Pose
 from visualization_msgs.msg import Marker, InteractiveMarkerControl, InteractiveMarkerFeedback
@@ -88,7 +89,7 @@ class BasicControlsNode(Node):
         pointcloud_qos = QoSProfile(
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1,
-            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            durability=QoSDurabilityPolicy.VOLATILE,
             reliability=QoSReliabilityPolicy.RELIABLE,
         )
 
@@ -113,11 +114,6 @@ class BasicControlsNode(Node):
         self.get_logger().info(f"Planner robot approximation sphere radius set to {planner_radius:.3f} m")
         self.fcl_world.set_planner_radius(planner_radius)
         
-        frequency = 500  # Hz
-        self.create_timer(1.0 / frequency, self.timer_callback)
-        self.create_timer(1.0 / frequency, lambda: self.fcl_world.update_from_tf(self.tf_buffer, rclpy.time.Time()))
-        # Timer that will try to initialize bottom_z
-        self.bottom_z_timer = self.create_timer(1.0 / frequency, self.init_bottom_z_once)
 
         self.current_target_vehicle_marker_pose = Pose()
         self.current_target_vehicle_marker_pose.orientation.w = 1.0
@@ -227,44 +223,30 @@ class BasicControlsNode(Node):
         self.header = Header()
         self.header.frame_id = self.vehicle_marker_frame
 
+        self.control_frequency = 500.0  # Hz
+        self.viz_frequency = 10.0       # Hz
+        self.cloud_frequency = 50.0     # Hz
+        self.fcl_update_frequency = 50.0  # Hz
+
+        self.control_timer = self.create_timer(1.0 / self.control_frequency, self.timer_callback)
+        self.viz_timer = self.create_timer(1.0 / self.viz_frequency, self.viz_timer_callback)
+        self.cloud_timer = self.create_timer(1.0 / self.cloud_frequency, self.cloud_timer_callback)
+        self.fcl_update_timer_handle = self.create_timer(1.0 / self.fcl_update_frequency, self.fcl_update_timer)
+        # Timer that will try to initialize bottom_z until it succeeds
+        self.bottom_z_timer = self.create_timer(0.1, self.init_bottom_z_once)
+
     def timer_callback(self):
         stamp_now = self.get_clock().now().to_msg()
-
-        min_marker, max_marker = visualize_min_max_coords(self)
-        min_marker.header.stamp = stamp_now
-        max_marker.header.stamp = stamp_now
-        self.env_aabb_pub.publish(min_marker)
-        self.env_aabb_pub.publish(max_marker)
-
         t = get_broadcast_tf(stamp_now, self.current_target_vehicle_marker_pose, self.base_frame, self.vehicle_marker_frame)
         self.tf_broadcaster.sendTransform(t)
-        
-        self.header.stamp = stamp_now
-        rov_cloud_msg = pc2.create_cloud_xyz32(self.header, self.workspace_pts_list)
-        self.taskspace_pc_publisher_.publish(rov_cloud_msg)
-
-        cloud_msg = pc2.create_cloud_xyz32(self.header, self.rov_ellipsoid_cl_pts)
-        self.rov_pc_publisher_.publish(cloud_msg)
 
         for k, robot in enumerate(self.robots):
             k_planner = robot.planner
-            if robot.prefix == self.robots_prefix[self.selected_robot_index]:
-                if k_planner.planned_result and k_planner.planned_result['status']:
-                    k_planner.update(
-                        stamp=stamp_now,
-                        frame_id=self.base_frame,
-                        xyz_np=k_planner.planned_result["xyz"],
-                        step=3,
-                        wp_size=0.08,
-                        goal_size=0.14,
-                    )
-
 
             state = robot.get_state()
             if state['status'] == 'active':
                 desired_body_acc = robot.body_acc_command + robot.arm.ddq_command
                 desired_body_vel = robot.body_vel_command + robot.arm.dq_command
-                robot.publish_robot_path()
 
                 if robot.final_goal is not None and k_planner.planned_result and k_planner.planned_result['status']:
                     waypoints = k_planner.planned_result["xyz"]
@@ -376,6 +358,45 @@ class BasicControlsNode(Node):
             ref=robot.pose_command+robot.arm.q_command
             robot.write_data_to_file(ref)
 
+    def viz_timer_callback(self):
+        stamp_now = self.get_clock().now().to_msg()
+
+        min_marker, max_marker = visualize_min_max_coords(self)
+        min_marker.header.stamp = stamp_now
+        max_marker.header.stamp = stamp_now
+        self.env_aabb_pub.publish(min_marker)
+        self.env_aabb_pub.publish(max_marker)
+
+        selected_prefix = self.robots_prefix[self.selected_robot_index]
+        for robot in self.robots:
+            k_planner = robot.planner
+            if robot.prefix == selected_prefix:
+                if k_planner.planned_result and k_planner.planned_result['status']:
+                    k_planner.update(
+                        stamp=stamp_now,
+                        frame_id=self.base_frame,
+                        xyz_np=k_planner.planned_result["xyz"],
+                        step=3,
+                        wp_size=0.08,
+                        goal_size=0.14,
+                    )
+            state = robot.get_state()
+            if state['status'] == 'active':
+                robot.publish_robot_path()
+
+    def fcl_update_timer(self):
+        self.fcl_world.update_from_tf(self.tf_buffer, rclpy.time.Time())
+
+    def cloud_timer_callback(self):
+        header = Header()
+        header.frame_id = self.vehicle_marker_frame
+        header.stamp = self.get_clock().now().to_msg()
+
+        rov_cloud_msg = pc2.create_cloud_xyz32(header, self.workspace_pts_list)
+        self.taskspace_pc_publisher_.publish(rov_cloud_msg)
+
+        cloud_msg = pc2.create_cloud_xyz32(header, self.rov_ellipsoid_cl_pts)
+        self.rov_pc_publisher_.publish(cloud_msg)
 
     def processFeedback(self, feedback):
         # For uv_marker
@@ -518,9 +539,9 @@ class BasicControlsNode(Node):
         self.get_logger().info(
             f"Captured bottom_z from TF: {self.bottom_z:.3f}"
         )
-
-        # Stop this timer, we only need it once
-        self.bottom_z_timer.cancel()
+        if self.bottom_z_timer is not None:
+            self.bottom_z_timer.cancel()
+            self.bottom_z_timer = None
 
 
 def main(args=None):

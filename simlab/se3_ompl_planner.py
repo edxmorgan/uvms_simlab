@@ -13,7 +13,7 @@ except Exception as e:
     ) from e
 
 
-def _compute_bounds_from_fcl(fcl_world: FCLWorld, z_min, pad_xy=0.5, pad_z=0.5):
+def _compute_bounds_from_fcl(fcl_world: FCLWorld, z_min, pad_xy=0.5, pad_z=1e-4):
     """
     Compute planner bounds from FCL world's AABB, with a small padding.
     If fcl_world is None or does not have min_coords, fall back to a large box.

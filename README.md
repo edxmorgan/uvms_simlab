@@ -1,73 +1,77 @@
 # uvms_simlab 🚀
 
-Extension of the [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) for interactive control, collision aware planning, and hardware ready UVMS experiments.
+Your plug-and-play lab for **Underwater Vehicle–Manipulator Systems**. `uvms_simlab` layers interactive control, collision-aware planning, and hardware-ready tooling on top of [uvms-simulator](https://github.com/edxmorgan/uvms-simulator). If you’re prototyping underwater manipulation or HIL experiments, star the repo and dive in!
 
-## Features ⭐
+![UVMS SimLab](https://raw.githubusercontent.com/edxmorgan/uvms-simulator/main/doc/uvms_env.png)
 
-* 🌀🖱️ **Interactive 6 DOF RViz Markers**
-  Direct vehicle and end effector control.
+## Why teams love uvms_simlab ⭐
 
-* 🤖 **Self Collision Avoidance**
-  Broad phase and narrow phase checks using FCL.
+- 🌀🖱️ **Drag-and-drive RViz controls** – steer the vehicle or end-effector directly with 6‑DoF markers.
+- 🤖 **Continuous self-collision checking** – convex hull + FCL narrow-phase keeps the manipulator safe.
+- 🗺️ **SE(3) planning & visualization** – plan coverage paths with OMPL and stream waypoints live.
+- 🎮 **PS4/Joy teleop & HIL switches** – toggle between simulation and hardware with launch args.
+- 📡 **Rich visualization suite** – workspace clouds, vehicle hulls, path trails, and marker menus baked in.
+- 📓 **Data logging hooks** – CSV logs per robot for ML datasets or controller tuning.
 
-* 🗺️ **Coverage Planning**
-  Automated workspace coverage with collision handling.
-
-* 🎮 **PS4 Teleoperation**
-  Bluetooth controller support for manual operation.
-
-* 🔧 **Simulation and Hardware**
-  Swap backends with simple launch arguments.
-
-* ⚡ **Fast Collision Detection**
-  Efficient bounding volume checks for planning.
-
-## Dependencies 📦
+## Quick start ⚡
 
 ```bash
 sudo pip install pyPS4Controller pynput scipy casadi pandas
-```
-
-Optional OMPL with Python bindings:
-
-```bash
 wget https://ompl.kavrakilab.org/install-ompl-ubuntu.sh
 chmod u+x install-ompl-ubuntu.sh
-./install-ompl-ubuntu.sh --python
-```
+./install-ompl-ubuntu.sh --python   # optional but recommended
 
-## Installation 🛠️
-
-```bash
-cd ros2_ws/src
+cd ~/ros2_ws/src
+git clone https://github.com/edxmorgan/uvms-simulator.git
 git clone https://github.com/edxmorgan/uvms_simlab.git
 cd ..
-colcon build
+colcon build --packages-select uvms-simulator simlab
 source install/setup.bash
 ```
 
-Requires `uvms-simulator` in the same workspace.
+## Launch recipes 🚢
 
-## Launch Examples 🚢
-
-**Interactive Control**
+**Interactive planner & RViz**
 
 ```bash
 ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
-    use_manipulator_hardware:=false use_vehicle_hardware:=false \
-    sim_robot_count:=1 task:=interactive
+    sim_robot_count:=1 task:=interactive \
+    use_manipulator_hardware:=false use_vehicle_hardware:=false
 ```
 
-**PS4 Manual Mode**
+**PS4 joystick teleop**
 
 ```bash
 ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
-    use_manipulator_hardware:=false use_vehicle_hardware:=false \
-    sim_robot_count:=1 task:=manual
+    task:=manual controllers:=pid
 ```
 
-## Contributing 🤝
+**Headless data collection**
 
-PRs are welcome. Fork the repo and submit improvements.
+```bash
+ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
+    gui:=false task:=planner record_data:=true
+```
 
----
+> 💡 Hardware swap: set `use_vehicle_hardware:=true` and `use_manipulator_hardware:=true` to drop your BlueROV2 Heavy + Reach Alpha 5 directly into the loop.
+
+## Project layout 🧭
+
+```
+simlab/
+├── simlab/interactive_control.py   # RViz markers, path planner, teleop
+├── simlab/robot.py                 # Robot wrapper, logging, command mux
+├── simlab/fcl_checker.py           # Collision environment utilities
+├── simlab/interactive_utils.py     # Marker helpers & viz utilities
+└── resource/                       # RViz configs, meshes, assets
+```
+
+## Contributing & community 🤝
+
+Have a new planner, sensor, or teleop idea? We’d love to merge it.
+
+1. Fork the repo & branch (`feat/coverage-planner`).
+2. `colcon test --packages-select simlab`.
+3. Attach screenshots/gifs to your PR so others can see the feature in action.
+
+Star the project, share your demos on social media or ROS Discourse, and help grow the UVMS community! 

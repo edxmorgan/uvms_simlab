@@ -635,22 +635,11 @@ class Robot(Base):
             f"manipulation_effort_controller_{prefix}/commands",
             qos_profile
         )        
-        # self.ref_acc = np.zeros(10)
-        # self.ref_vel = np.zeros(10)
-        # self.ref_pos = initial_ref_pos
-        # self.velocity_yaw = None
 
-       # Initialize path poses
-        # self.path_poses = []
         self.traj_path_poses = []
-        # self.gt_traj_path_poses = []
-
-
-        # self.MAX_POSES = 10000
-
-        # # robot trajectory
-        # self.trajectory_twist = []
-        # self.trajectory_poses = []
+        self.max_traj_pose_count = 2000  # cap RViz message size
+        self.path_publish_period = 0.1  # seconds between stored poses
+        self._last_path_pub_time = None
 
         self.record = record
 
@@ -843,9 +832,18 @@ class Robot(Base):
 
     def publish_robot_path(self):
         # Publish the robot trajectory path to RViz
+        now_msg = self.node.get_clock().now().to_msg()
+        stamp_time = now_msg.sec + now_msg.nanosec * 1e-9
+        if (
+            self._last_path_pub_time is not None
+            and (stamp_time - self._last_path_pub_time) < self.path_publish_period
+        ):
+            return
+        self._last_path_pub_time = stamp_time
+
         tra_path_msg = Path()
-        tra_path_msg.header.stamp = self.node.get_clock().now().to_msg()
-        tra_path_msg.header.frame_id = f"{self.prefix}map"  # Set to your appropriate frame
+        tra_path_msg.header.stamp = now_msg
+        tra_path_msg.header.frame_id = f"{self.prefix}map" 
 
         # Create PoseStamped from ref_pos
         traj_pose = PoseStamped()
@@ -857,6 +855,9 @@ class Robot(Base):
 
         # Accumulate poses
         self.traj_path_poses.append(traj_pose)
+        if self.max_traj_pose_count > 0 and len(self.traj_path_poses) > self.max_traj_pose_count:
+            # Keep only the most recent poses to avoid timer overruns
+            self.traj_path_poses = self.traj_path_poses[-self.max_traj_pose_count:]
         tra_path_msg.poses = self.traj_path_poses
 
         self.trajectory_path_publisher.publish(tra_path_msg)
