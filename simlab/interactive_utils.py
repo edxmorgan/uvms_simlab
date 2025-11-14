@@ -1,11 +1,12 @@
-from geometry_msgs.msg import Point
 from tf_transformations import quaternion_matrix, quaternion_from_matrix
 from geometry_msgs.msg import TransformStamped
 from visualization_msgs.msg import Marker, InteractiveMarker,InteractiveMarkerControl
 from geometry_msgs.msg import Pose
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-from builtin_interfaces.msg import Duration
+from rclpy.duration import Duration
+from tf2_ros import TransformException
+import rclpy
 
 def compute_bounding_sphere_radius(points, quantile=0.995, pad=0.03):
     """
@@ -228,67 +229,42 @@ def get_relative_pose(marker_pose, endeffector_pose):
     T_rel = np.dot(np.linalg.inv(T_marker), T_ee)
     return homogeneous_to_pose(T_rel)
 
-# def publish_waypoint_spheres(
-#     stamp,
-#     frame_id,
-#     xyz_np,
-#     marker_id,
-#     step=3,
-#     size_m=0.08,
-#     goal_size_m=0.14,
-#     goal_color=(0.95, 0.2, 0.2, 1.0),   # RGBA for goal sphere
-#     wp_color=(0.1, 0.6, 0.95, 1.0),     # RGBA for waypoint spheres
-# ):
-#     """
-#     Build two markers, a SPHERE_LIST for waypoints and a single SPHERE for the goal.
-#     Goal is always the final element of the full path.
-#     """
-#     if xyz_np is None or len(xyz_np) == 0:
-#         return None, None
+def visualize_min_max_coords(node):
+    # Fallback if TF never came in
+    bottom_z = node.bottom_z if node.bottom_z is not None else 0.0
 
-#     # Subsample for lightweight visualization
-#     step = max(1, int(step))
-#     pts_vis = xyz_np[::step]
+    pose_min = Pose()
+    pose_min.position.x, pose_min.position.y, _ = node.fcl_world.min_coords
+    pose_min.position.z = bottom_z
+    pose_min.orientation.w = 1.0
 
-#     # Waypoints, skip the last path point so the goal is separate
-#     wp_marker = Marker()
-#     wp_marker.header.frame_id = frame_id
-#     wp_marker.header.stamp = stamp
-#     wp_marker.ns = "planner"
-#     wp_marker.id = int(marker_id)
-#     wp_marker.type = Marker.SPHERE_LIST
-#     wp_marker.action = Marker.ADD
-#     wp_marker.scale.x = float(size_m)
-#     wp_marker.scale.y = float(size_m)
-#     wp_marker.scale.z = float(size_m)
-#     wp_marker.pose.orientation.w = 1.0
-#     wp_marker.color.r, wp_marker.color.g, wp_marker.color.b, wp_marker.color.a = wp_color
+    pose_max = Pose()
+    pose_max.position.x, pose_max.position.y, _ = node.fcl_world.max_coords
+    pose_max.position.z = 0.0
+    pose_max.orientation.w = 1.0
 
-#     wp_marker.points = []
-#     if len(pts_vis) > 1:
-#         for p in pts_vis[:-1]:
-#             pt = Point()
-#             pt.x, pt.y, pt.z = float(p[0]), float(p[1]), float(p[2])
-#             wp_marker.points.append(pt)
+    min_marker = makeBox(
+        fixed=True,
+        scale=1.2,
+        marker_type=Marker.CUBE,
+        initial_pose=pose_min,
+    )
+    max_marker = makeBox(
+        fixed=False,
+        scale=1.2,
+        marker_type=Marker.CUBE,
+        initial_pose=pose_max,
+    )
 
-#     # Goal, use the true last point
-#     gx, gy, gz = map(float, pts_vis[-1])
-#     goal_marker = Marker()
-#     goal_marker.header.frame_id = frame_id
-#     goal_marker.header.stamp = stamp
-#     goal_marker.ns = "planner"
-#     goal_marker.id = int(marker_id) + 1
-#     goal_marker.type = Marker.SPHERE
-#     goal_marker.action = Marker.ADD
-#     goal_marker.scale.x = float(goal_size_m)
-#     goal_marker.scale.y = float(goal_size_m)
-#     goal_marker.scale.z = float(goal_size_m)
-#     goal_marker.pose.position.x = gx
-#     goal_marker.pose.position.y = gy
-#     goal_marker.pose.position.z = gz
-#     goal_marker.pose.orientation.w = 1.0
-#     goal_marker.color.r, goal_marker.color.g, goal_marker.color.b, goal_marker.color.a = goal_color
+    min_marker.header.frame_id = node.world_frame
+    max_marker.header.frame_id = node.world_frame
 
-#     wp_marker.frame_locked = True
-#     goal_marker.frame_locked = True
-#     return wp_marker, goal_marker
+    min_marker.ns = "fcl_extents"
+    max_marker.ns = "fcl_extents"
+    min_marker.id = 0
+    max_marker.id = 1
+
+    min_marker.action = Marker.ADD
+    max_marker.action = Marker.ADD
+
+    return min_marker, max_marker

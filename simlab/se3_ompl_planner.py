@@ -13,10 +13,31 @@ except Exception as e:
     ) from e
 
 
-# Bounds
-X_MIN, X_MAX = -10000.0, 10000.0
-Y_MIN, Y_MAX = -10000.0, 10000.0
-Z_MIN, Z_MAX = -10000.0, 0.0
+def _compute_bounds_from_fcl(fcl_world: FCLWorld, z_min, pad_xy=0.5, pad_z=0.5):
+    """
+    Compute planner bounds from FCL world's AABB, with a small padding.
+    If fcl_world is None or does not have min_coords, fall back to a large box.
+    """
+    if fcl_world is None or not hasattr(fcl_world, "min_coords") or fcl_world.min_coords is None:
+        # fallback to previous large bounds
+        return (
+            -10000.0, 10000.0,   # x
+            -10000.0, 10000.0,   # y
+            -10000.0, 0.0,       # z
+        )
+
+    min_c = np.asarray(fcl_world.min_coords, float)
+    max_c = np.asarray(fcl_world.max_coords, float)
+
+    x_min = float(min_c[0] - pad_xy)
+    x_max = float(max_c[0] + pad_xy)
+    y_min = float(min_c[1] - pad_xy)
+    y_max = float(max_c[1] + pad_xy)
+
+    z_max = 0.0 + pad_z
+
+    return x_min, x_max, y_min, y_max, z_min, z_max
+
 
 def _resample_by_distance(xyz_np, quat_np, spacing_m=0.20, max_points=2000):
     """
@@ -55,24 +76,41 @@ def _resample_by_distance(xyz_np, quat_np, spacing_m=0.20, max_points=2000):
 
     return xyz_np[idx], quat_np[idx]
 
-
-def _valid_with_fcl(rclpy_node:Node, fcl_world:FCLWorld, safety_margin:float, state):
+def _valid_with_fcl(
+    rclpy_node: Node,
+    safety_margin: float,
+    x_min: float,
+    x_max: float,
+    y_min: float,
+    y_max: float,
+    z_min: float,
+    z_max: float,
+    max_abs_roll: float,
+    max_abs_pitch: float,
+    state,
+):
     x, y, z = state.getX(), state.getY(), state.getZ()
-    if not (X_MIN <= x <= X_MAX and Y_MIN <= y <= Y_MAX and Z_MIN <= z <= Z_MAX):
+    if not (x_min <= x <= x_max and y_min <= y <= y_max and z_min <= z <= z_max):
         return False
+
+    # Orientation constraint, keep roll and pitch near zero
+    q = state.rotation()
+    # OMPL uses w x y z, scipy uses x y z w
+    quat = [q.x, q.y, q.z, q.w]
+    roll, pitch, yaw = R.from_quat(quat).as_euler("xyz", degrees=False)
+
+    if abs(roll) > max_abs_roll or abs(pitch) > max_abs_pitch:
+        return False
+
     pw = np.array([x, y, z], float)
 
-    # use a margin, else fall back to collision test
     if safety_margin is not None and safety_margin > 0.0:
-        # rclpy_node.get_logger().info(f"********************using min_distance_xyz")
-        d = fcl_world.min_distance_xyz(pw)
-        # rclpy_node.get_logger().info(f"********************planner points validity {pw[0]}, {pw[1]}, {pw[2]} is in collision distance : {d}")
+        d = rclpy_node.fcl_world.min_distance_xyz(pw)
         return d >= safety_margin
     else:
-        # rclpy_node.get_logger().info(f"********************using collision test")
-        in_collision = fcl_world.planner_in_collision_at_xyz(pw)
-        # rclpy_node.get_logger().info(f"********************planner points validity {pw[0]}, {pw[1]}, {pw[2]} is in collision : {in_collision}")
+        in_collision = rclpy_node.fcl_world.planner_in_collision_at_xyz(pw)
         return not in_collision
+
 
 
 def plan_se3_path(
@@ -82,30 +120,50 @@ def plan_se3_path(
     goal_xyz,
     goal_quat_wxyz,
     time_limit=0.75,
-    fcl_world=None,
     safety_margin=0.0,
-    spacing_m=0.20,           # new: desired waypoint spacing in meters
-    dense_interpolation=400,  # new: dense samples before distance resampling
-    max_points=2000           # new: cap to avoid flooding downstream
+    spacing_m=0.20,
+    dense_interpolation=400,
+    max_points=2000,
+    max_abs_roll=np.deg2rad(10.0),   # 10 degrees
+    max_abs_pitch=np.deg2rad(10.0),  # 10 degrees
 ):
-    """
-    Return dict with keys xyz, quat_wxyz, count.
-    If fcl_world is provided, validity uses its planner sphere against the env.
-    base_to_world is a dict with keys quat_wxyz and trans_xyz for transforming states.
-    safety_margin, in meters, requires clearance when min distance is available.
-    """
     space = ob.SE3StateSpace()
+
+    # Bounds from FCL world AABB plus padding
+    x_min, x_max, y_min, y_max, z_min, z_max = _compute_bounds_from_fcl(
+        rclpy_node.fcl_world,
+        rclpy_node.bottom_z,
+    )
+
+    rclpy_node.get_logger().info(
+        f"Planner bounds x[{x_min:.2f}, {x_max:.2f}], "
+        f"y[{y_min:.2f}, {y_max:.2f}], z[{z_min:.2f}, {z_max:.2f}]"
+    )
+
     bounds = ob.RealVectorBounds(3)
-    bounds.setLow(0, X_MIN); bounds.setHigh(0, X_MAX)
-    bounds.setLow(1, Y_MIN); bounds.setHigh(1, Y_MAX)
-    bounds.setLow(2, Z_MIN); bounds.setHigh(2, Z_MAX)
+    bounds.setLow(0, x_min); bounds.setHigh(0, x_max)
+    bounds.setLow(1, y_min); bounds.setHigh(1, y_max)
+    bounds.setLow(2, z_min); bounds.setHigh(2, z_max)
     space.setBounds(bounds)
 
     ss = og.SimpleSetup(space)
 
-    checker = ob.StateValidityCheckerFn(partial(_valid_with_fcl, rclpy_node, fcl_world, float(safety_margin)))
+    checker = ob.StateValidityCheckerFn(
+        partial(
+            _valid_with_fcl,
+            rclpy_node,
+            float(safety_margin),
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+            z_min,
+            z_max,
+            float(max_abs_roll),
+            float(max_abs_pitch),
+        )
+    )
     ss.setStateValidityChecker(checker)
-
     start = ob.State(space)
     goal = ob.State(space)
 

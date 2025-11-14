@@ -36,7 +36,7 @@ from control_msgs.msg import DynamicInterfaceGroupValues
 from std_msgs.msg import Float64MultiArray
 from controller_msg import FullRobotMsg
 from controllers import LowLevelController
-from liecasadi import SE3, S1
+from planner_markers import PathPlanner
     
 class PS4Controller(Controller):
     def __init__(self, ros_node, prefix, **kwargs):
@@ -493,7 +493,7 @@ class Robot(Base):
                   prefix,
                   record=False,  
                   controller='pid'):
-        self.planner = None
+        self.planner: PathPlanner = None
         self.menu_handle = None
         self.final_goal = None
         self.subscription = node.create_subscription(

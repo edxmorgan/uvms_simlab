@@ -2,7 +2,6 @@ import numpy as np
 import ament_index_python
 import os
 import casadi as ca
-from blue_rov import Params as blue
 
 class LowLevelController:
     def __init__(self, arm_dof: int = 4):
@@ -34,7 +33,7 @@ class LowLevelController:
 
 
         self.kp = np.array([15.0, 15.0, 20.0, 1.5, 1.5, 3.5])
-        self.ki = np.array([1.0, 1.0, 1.0, 1e-1, 1e-1, 1e-1])
+        self.ki = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.kd = np.array([5.0, 5.0, 5.0, 5e-1, 5e-1, 1])
 
     def vehicle_controller(self, state: np.ndarray, target: np.ndarray, dt: float) -> np.ndarray:

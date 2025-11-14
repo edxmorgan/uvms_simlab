@@ -54,12 +54,25 @@ class BasicControlsNode(Node):
         self.get_logger().info(f"Minimum coordinates (min_x, min_y, min_z): {self.fcl_world.min_coords}")
         self.get_logger().info(f"Maximum coordinates (max_x, max_y, max_z): {self.fcl_world.max_coords}")
         self.get_logger().info(f"Oriented Bounding Box corners: {self.fcl_world.obb_corners}")
-
-
+  
         package_share_directory = ament_index_python.get_package_share_directory('simlab')
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        viz_qos = QoSProfile(
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=1,
+                durability=QoSDurabilityPolicy.VOLATILE,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+            )
+        self.planner_marker_publisher = self.create_publisher(Marker, "planned_waypoints_marker", viz_qos)
+
+        # New publisher for FCL environment AABB
+        self.env_aabb_pub = self.create_publisher(Marker, "fcl_environment_aabb", viz_qos)
+        self.world_frame = "world"          # change if needed
+        self.world_bottom_frame = "world_bottom"
+        self.bottom_z = None
 
         # Example: get some parameters
         self.no_robot = self.get_parameter('no_robot').value
@@ -69,13 +82,7 @@ class BasicControlsNode(Node):
         self.controllers = self.get_parameter('controllers').value
         self.total_no_efforts = self.no_robot * self.no_efforts
 
-        viz_qos = QoSProfile(
-            history=QoSHistoryPolicy.KEEP_LAST,
-                depth=1,
-                durability=QoSDurabilityPolicy.VOLATILE,
-                reliability=QoSReliabilityPolicy.RELIABLE,
-    
-        )
+ 
         self.planner_marker_publisher = self.create_publisher(Marker, "planned_waypoints_marker", viz_qos)
 
         pointcloud_qos = QoSProfile(
@@ -110,7 +117,8 @@ class BasicControlsNode(Node):
         frequency = 500  # Hz
         self.create_timer(1.0 / frequency, self.timer_callback)
         self.create_timer(1.0 / frequency, lambda: self.fcl_world.update_from_tf(self.tf_buffer, rclpy.time.Time()))
-
+        # Timer that will try to initialize bottom_z
+        self.bottom_z_timer = self.create_timer(1.0 / frequency, self.init_bottom_z_once)
 
         self.current_target_vehicle_marker_pose = Pose()
         self.current_target_vehicle_marker_pose.orientation.w = 1.0
@@ -220,8 +228,14 @@ class BasicControlsNode(Node):
         self.header = Header()
         self.header.frame_id = self.vehicle_marker_frame
 
-    def timer_callback(self):        
+    def timer_callback(self):
         stamp_now = self.get_clock().now().to_msg()
+
+        min_marker, max_marker = visualize_min_max_coords(self)
+        min_marker.header.stamp = stamp_now
+        max_marker.header.stamp = stamp_now
+        self.env_aabb_pub.publish(min_marker)
+        self.env_aabb_pub.publish(max_marker)
 
         t = get_broadcast_tf(stamp_now, self.current_target_vehicle_marker_pose, self.base_frame, self.vehicle_marker_frame)
         self.tf_broadcaster.sendTransform(t)
@@ -424,6 +438,9 @@ class BasicControlsNode(Node):
                         #     f"  goal_quat_wxyz    {goal_quat_wxyz.tolist()}\n"
                         # )
 
+                        #   node.bottom_z
+                        #   node.fcl_world.min_coords
+                        #   node.fcl_world.max_coords
 
                         k_planner.planned_result = plan_se3_path(
                             self,
@@ -432,8 +449,7 @@ class BasicControlsNode(Node):
                             goal_xyz=goal_xyz,
                             goal_quat_wxyz=goal_quat_wxyz,
                             time_limit=1.0,
-                            fcl_world=self.fcl_world,
-                            safety_margin=0.1,
+                            safety_margin=1e-2,
                         )
                         self.get_logger().info(
                             f"Planned path with {k_planner.planned_result['count']} states"
@@ -485,7 +501,28 @@ class BasicControlsNode(Node):
                 self.server.setPose("task_marker", self.last_valid_task_pose)
                 self.server.applyChanges()
 
-   
+    def init_bottom_z_once(self):
+        try:
+            ts = self.tf_buffer.lookup_transform(
+                target_frame=self.world_frame,
+                source_frame=self.world_bottom_frame,
+                time=rclpy.time.Time(),
+                timeout=Duration(seconds=0.1),
+            )
+        except TransformException as ex:
+            self.get_logger().warn(
+                f"Waiting for TF {self.world_frame} <- {self.world_bottom_frame}: {ex}"
+            )
+            return
+
+        self.bottom_z = ts.transform.translation.z
+        self.get_logger().info(
+            f"Captured bottom_z from TF: {self.bottom_z:.3f}"
+        )
+
+        # Stop this timer, we only need it once
+        self.bottom_z_timer.cancel()
+
 
 def main(args=None):
     rclpy.init(args=args)
