@@ -9,7 +9,7 @@ class LowLevelController:
         package_share_directory = ament_index_python.get_package_share_directory('simlab')
 
         # Vehicle PID
-        uv_pid_controller_path = os.path.join(package_share_directory, 'vehicle/uv_pid_controller.casadi')
+        uv_pid_controller_path = os.path.join(package_share_directory, 'vehicle/uv_reg_pid_controller.casadi')
         self.uv_pid_controller = ca.Function.load(uv_pid_controller_path)
         self.vehicle_pid_i_buffer = np.zeros(6, dtype=float)  # 6 dof vehicle integral buffer
 
@@ -23,6 +23,19 @@ class LowLevelController:
         self.arm_dof = int(arm_dof)
         self.arm_pid_i_buffer = np.zeros(self.arm_dof, dtype=float)  # arm integral buffer
         self.g_ff = [0,0,0,0]  # feedforward gravity compensation
+
+        self.vehicle_model_params = [3.72028553e+01, 2.21828075e+01, 6.61734807e+01, 3.38909801e+00,
+                                  6.41362046e-01, 6.41362034e-01, 3.38909800e+00, 1.39646394e+00,
+                                  4.98032205e-01, 2.53118738e+00, 1.05000000e+02, 9.78296453e+01,
+                                  8.27479545e-01, 1.36822559e-01, 4.25841171e+00, -7.36416666e+01,
+                                  -3.36082112e+01, -8.94055107e+01, -2.98736214e+00, -1.57921531e+00,
+                                  -3.39766499e+00, -1.47912104e-04, -5.16373030e-04, -9.85522538e+01,
+                                  -3.05907788e-02, -1.27877517e-01, -1.63514832e+00]
+
+
+        self.kp = np.array([15.0, 15.0, 20.0, 1.5, 1.5, 3.5])
+        self.ki = np.array([1.0, 1.0, 1.0, 1e-1, 1e-1, 1e-1])
+        self.kd = np.array([5.0, 5.0, 5.0, 5e-1, 5e-1, 1])
 
     def vehicle_controller(self, state: np.ndarray, target: np.ndarray, dt: float) -> np.ndarray:
         """
@@ -42,13 +55,10 @@ class LowLevelController:
         buf = np.zeros(6, dtype=float)  # Disable integral action for now
 
         pid_control, i_buf_next = self.uv_pid_controller(
-            blue.W,
-            blue.B,
-            blue.rg,
-            blue.rb,
-            blue.kp,
-            blue.ki,
-            blue.kd,
+            self.vehicle_model_params,
+            self.kp,
+            self.ki,
+            self.kd,
             ca.DM(buf),
             ca.DM(state),
             ca.DM(target),
