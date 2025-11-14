@@ -19,7 +19,7 @@ Your plug-and-play lab for **Underwater Vehicle–Manipulator Systems**. `uvms_s
 sudo pip install pyPS4Controller pynput scipy casadi pandas
 wget https://ompl.kavrakilab.org/install-ompl-ubuntu.sh
 chmod u+x install-ompl-ubuntu.sh
-./install-ompl-ubuntu.sh --python   # optional but recommended
+./install-ompl-ubuntu.sh --python
 
 cd ~/ros2_ws/src
 git clone https://github.com/edxmorgan/uvms-simulator.git
@@ -68,10 +68,4 @@ simlab/
 
 ## Contributing & community 🤝
 
-Have a new planner, sensor, or teleop idea? We’d love to merge it.
-
-1. Fork the repo & branch (`feat/coverage-planner`).
-2. `colcon test --packages-select simlab`.
-3. Attach screenshots/gifs to your PR so others can see the feature in action.
-
-Star the project, share your demos on social media or ROS Discourse, and help grow the UVMS community! 
+Have a new planner, sensor, or teleop idea? I’d love to merge it.
