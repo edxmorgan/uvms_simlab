@@ -111,6 +111,11 @@ def _valid_with_fcl(
         in_collision = rclpy_node.fcl_world.planner_in_collision_at_xyz(pw)
         return not in_collision
 
+def _get_path_length_objective(si: ob.SpaceInformation, threshold: float | None = None):
+    obj = ob.PathLengthOptimizationObjective(si)
+    if threshold is not None:
+        obj.setCostThreshold(ob.Cost(float(threshold)))
+    return obj
 
 
 def plan_se3_path(
@@ -126,6 +131,8 @@ def plan_se3_path(
     max_points=2000,
     max_abs_roll=np.deg2rad(10.0),   # 10 degrees
     max_abs_pitch=np.deg2rad(10.0),  # 10 degrees
+    planner_type: str = "BITstar",   # "BITstar" or "RRTstar"
+    path_length_threshold: float | None = None,  # optional optimality threshold
 ):
     space = ob.SE3StateSpace()
 
@@ -186,18 +193,32 @@ def plan_se3_path(
 
     ss.setStartAndGoalStates(start, goal)
 
-    if not ss.getSpaceInformation().satisfiesBounds(s):
+    si = ss.getSpaceInformation()
+
+    if not si.satisfiesBounds(s):
         raise RuntimeError("Start violates bounds after enforceBounds")
-    if not ss.getSpaceInformation().satisfiesBounds(g):
+    if not si.satisfiesBounds(g):
         raise RuntimeError("Goal violates bounds after enforceBounds")
 
+    # Optimality objective, minimize path length, optional threshold
+    objective = _get_path_length_objective(si, path_length_threshold)
+    ss.setOptimizationObjective(objective)
+
+
     # planner and resolution
-    ss.setPlanner(og.BITstar(ss.getSpaceInformation()))
+    if planner_type == "RRTstar":
+        planner = og.RRTstar(si)
+    else:
+        planner = og.BITstar(si)
+
+
+    # planner and resolution
+    ss.setPlanner(planner)
+
     space.setLongestValidSegmentFraction(0.01)
-    ss.getSpaceInformation().setStateValidityCheckingResolution(0.01)
+    si.setStateValidityCheckingResolution(0.01)
 
     if not ss.solve(time_limit):
-        # raise RuntimeError("Planner did not find a solution")
         return {
             "status":False,
             "message":"Planner did not find a solution"
@@ -225,10 +246,29 @@ def plan_se3_path(
         max_points=int(max_points)
     )
 
+    # Compute final cost and raw geometric length of the solution path
+    try:
+        cost_obj = path.cost(objective)          # OMPL computes path cost here
+        cost_val = float(cost_obj.value())      # unwrap Cost to a float
+    except Exception:
+        cost_val = None
+
+    try:
+        geom_length = float(path.length())      # Euclidean length in state space
+    except Exception:
+        geom_length = None
+
+
     return {
         "xyz": xyz_rs,
         "quat_wxyz": quat_rs,
         "count": int(xyz_rs.shape[0]),
         "status": True,
-        "message": f"Planner found solution with {xyz_rs.shape[0]} waypoints at ~{spacing_m} m spacing"
+        "path_length_cost": cost_val,
+        "geom_length": geom_length,
+        "message": (
+            f"Planner found solution with {xyz_rs.shape[0]} waypoints at ~{spacing_m} m spacing"
+            + (f", cost {cost_val:.3f}" if cost_val is not None else "")
+            + (f", geom length {geom_length:.3f}" if geom_length is not None else "")
+        ),
     }

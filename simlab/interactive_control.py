@@ -37,11 +37,14 @@ import sensor_msgs_py.point_cloud2 as pc2
 from scipy.spatial import ConvexHull
 from alpha_reach import Params as alpha
 from se3_ompl_planner import plan_se3_path
+from cartesian_ruckig import CartesianRuckig
+from ruckig import Result
 from fcl_checker import FCLWorld
 from interactive_utils import *
 from planner_markers import PathPlanner
 from frame_utils import PoseX
 from typing import List
+from scipy.spatial.transform import Rotation as R
 
 class BasicControlsNode(Node):
     def __init__(self):
@@ -115,6 +118,9 @@ class BasicControlsNode(Node):
         self.fcl_world.set_planner_radius(planner_radius)
         
 
+        # Define a threshold error at which we start yaw blending.
+        self.pos_blend_threshold = 1.1
+
         self.current_target_vehicle_marker_pose = Pose()
         self.current_target_vehicle_marker_pose.orientation.w = 1.0
         self.selected_robot_index = 0 # by default robot 0 is selected
@@ -139,9 +145,25 @@ class BasicControlsNode(Node):
         self.execute_handle = self.menu_handler.insert("Plan & execute", callback=self.processFeedback)
         sub_menu_handle = self.menu_handler.insert("Robots")
 
+        self.control_frequency = 500.0  # Hz
+        self.viz_frequency = 10.0       # Hz
+        self.cloud_frequency = 100.0     # Hz
+        self.fcl_update_frequency = 50.0  # Hz
+
+        # Ruckig Cartesian trajectory generators, one per robot
+        self.cartesian_dt = 1.0 / self.control_frequency
+        self.max_cartesian_waypoints = 500
+
         self.robots:List[Robot] = []
         for k, (prefix, controller) in enumerate(zip(self.robots_prefix, self.controllers)):
             robot_k = Robot(self, k, 4, prefix, self.record, controller)
+
+            robot_k.cart_traj = CartesianRuckig(
+                self,
+                dofs=3,
+                control_dt=self.cartesian_dt,
+                max_waypoints=self.max_cartesian_waypoints,
+            )
 
             # unique planner per robot
             robot_k.planner = PathPlanner(self, ns=f"planner/{prefix}", base_id=k)
@@ -223,11 +245,6 @@ class BasicControlsNode(Node):
         self.header = Header()
         self.header.frame_id = self.vehicle_marker_frame
 
-        self.control_frequency = 500.0  # Hz
-        self.viz_frequency = 10.0       # Hz
-        self.cloud_frequency = 100.0     # Hz
-        self.fcl_update_frequency = 50.0  # Hz
-
         self.control_timer = self.create_timer(1.0 / self.control_frequency, self.timer_callback)
         self.viz_timer = self.create_timer(1.0 / self.viz_frequency, self.viz_timer_callback)
         self.cloud_timer = self.create_timer(1.0 / self.cloud_frequency, self.cloud_timer_callback)
@@ -249,74 +266,59 @@ class BasicControlsNode(Node):
                 desired_body_vel = robot.body_vel_command + robot.arm.dq_command
 
                 if robot.final_goal is not None and k_planner.planned_result and k_planner.planned_result['status']:
-                    waypoints = k_planner.planned_result["xyz"]
-                    quats = k_planner.planned_result["quat_wxyz"]
-
-                    # Initialize index if not present
-                    if not hasattr(robot, "wp_index"):
-                        robot.wp_index = 0
-
-                    # Use current waypoint
-                    target_nwu = waypoints[robot.wp_index]
-                    target_quat = quats[robot.wp_index]
-
-                    # Convert to NED for control
-                    target_pose = PoseX.from_pose(
-                        xyz=target_nwu,
-                        rot=target_quat,
-                        rot_rep="quat_wxyz",
-                        frame="NWU",
-                    )
-                    p_cmd_ned, rpy_cmd_ned = target_pose.get_pose(frame="NED", rot_rep="euler_xyz")
-
-                    # Get the velocity-based yaw.
-                    adjusted_yaw = robot.orient_towards_velocity()
+                    # Convert once to NumPy arrays
+                    path_xyz = np.asarray(k_planner.planned_result["xyz"], dtype=float)
+                    path_quat = np.asarray(k_planner.planned_result["quat_wxyz"], dtype=float)
 
                     # Compute current manifold errors
-                    wp_err_trans, wp_err_rot, wp_err_joint, goal_err_trans, goal_err_rot = robot.compute_manifold_errors()
-                    # self.get_logger().info(f"yaw now at pos err manifold {goal_err_rot}")
-                    
+                    wp_err_trans, wp_err_rot, wp_err_joint, goal_err_trans, goal_err_rot = robot.compute_errors()
                     goal_xyz_error = np.linalg.norm(goal_err_trans)
-
-
-                    # Define a threshold error at which we start blending.
-                    pos_blend_threshold = 1.1  # Adjust based on your system's scale
 
                     # Calculate the blend factor.
                     # When pos_error >= pos_blend_threshold, blend_factor will be 0 (full velocity_yaw).
                     # When pos_error == 0, blend_factor will be 1 (full target_yaw).
-                    blend_factor = np.clip((pos_blend_threshold - goal_xyz_error) / pos_blend_threshold, 0.0, 1.0)
+                    robot.yaw_blend_factor = np.clip((self.pos_blend_threshold - goal_xyz_error) / self.pos_blend_threshold, 0.0, 1.0)
+                    # self.get_logger().info(
+                    #     f"{robot.yaw_blend_factor} yaw_blend_factor"
+                    # )
+                    # Get the velocity-based yaw.
+                    adjusted_yaw = robot.orient_towards_velocity()
 
-                    # If velocity_yaw is not available, simply use the target yaw.
-                    if adjusted_yaw is None:
-                        self.get_logger().info(f"adjusted_yaw is None")
-                        final_yaw = rpy_cmd_ned[2]
-                    else:
+                    pos_nwu, res = robot.cart_traj.update(robot.yaw_blend_factor)
+
+                    if pos_nwu is not None:
+                        target_nwu = np.asarray(pos_nwu, dtype=float)
+
+                        # Pick orientation from nearest OMPL waypoint
+                        dists = np.linalg.norm(path_xyz - target_nwu, axis=1)
+                        idx = int(np.argmin(dists))
+                        target_quat = path_quat[idx]
+
+                        # Convert target pose from NWU to NED
+                        target_pose = PoseX.from_pose(
+                            xyz=target_nwu,
+                            rot=target_quat,
+                            rot_rep="quat_wxyz",
+                            frame="NWU",
+                        )
+                        p_cmd_ned, rpy_cmd_ned = target_pose.get_pose(
+                            frame="NED",
+                            rot_rep="euler_xyz",
+                        )
+
+
                         # Blend the yaw values: more weight to target_yaw as the position error decreases.
-                        final_yaw = (1 - blend_factor) * adjusted_yaw + blend_factor * rpy_cmd_ned[2]
+                        rpy_cmd_ned[2] = (1 - robot.yaw_blend_factor) * adjusted_yaw + robot.yaw_blend_factor * rpy_cmd_ned[2]
 
-                    # self.get_logger().info(f"{final_yaw} yaw now at pos err {goal_xyz_error}")
+                        robot.pose_command = [
+                            float(p_cmd_ned[0]),
+                            float(p_cmd_ned[1]),
+                            float(p_cmd_ned[2]),
+                            float(rpy_cmd_ned[0]),
+                            float(rpy_cmd_ned[1]),
+                            float(rpy_cmd_ned[2]),
+                        ]
 
-                    robot.pose_command = [
-                        float(p_cmd_ned[0]),
-                        float(p_cmd_ned[1]),
-                        float(p_cmd_ned[2]),
-                        float(rpy_cmd_ned[0]),
-                        float(rpy_cmd_ned[1]),
-                        float(final_yaw),
-                    ]
-
-                    wp_pos_error = np.linalg.norm(wp_err_trans)
-                    wp_rot_error = np.linalg.norm(wp_err_rot)
-
-                    # Check if translation error small enough to move to next waypoint
-                    if wp_pos_error < 5e-1 and wp_rot_error < 5e-1:
-                        if robot.wp_index < len(waypoints) - 1:
-                            robot.wp_index += 1
-                            # self.get_logger().info(f"{robot.prefix} → waypoint {robot.wp_index}")
-                        else:
-                            # Reached final waypoint
-                            self.get_logger().info(f"{robot.prefix} path complete", once=True)
 
                     robot.arm.q_command = [self.q0_des, self.q1_des, self.q2_des, self.q3_des]
                                             
@@ -457,11 +459,6 @@ class BasicControlsNode(Node):
                         #     f"  goal_xyz          {goal_xyz.tolist()}\n"
                         #     f"  goal_quat_wxyz    {goal_quat_wxyz.tolist()}\n"
                         # )
-
-                        #   node.bottom_z
-                        #   node.fcl_world.min_coords
-                        #   node.fcl_world.max_coords
-
                         k_planner.planned_result = plan_se3_path(
                             self,
                             start_xyz=start_xyz,
@@ -469,11 +466,39 @@ class BasicControlsNode(Node):
                             goal_xyz=goal_xyz,
                             goal_quat_wxyz=goal_quat_wxyz,
                             time_limit=1.0,
-                            safety_margin=1e-2,
+                            safety_margin=1e-2
                         )
+
+
                         self.get_logger().info(
-                            f"Planned path with {k_planner.planned_result['count']} states"
+                            f"{k_planner.planned_result['message']}"
                         )
+
+                        if k_planner.planned_result["status"]:
+                            path_xyz = np.asarray(
+                                k_planner.planned_result["xyz"],
+                                dtype=float,
+                            )
+
+                            # Simple conservative limits, tune these
+                            max_vel = np.array([0.25, 0.25, 0.20], dtype=float)
+                            max_acc = np.array([0.15, 0.15, 0.12], dtype=float)
+                            max_jerk = np.array([0.5, 0.5, 0.4], dtype=float)
+
+                            # Start a smooth Cartesian trajectory in NWU
+                            robot.cart_traj.start_from_path(
+                                current_position=start_xyz,
+                                path_xyz=path_xyz,
+                                max_vel=max_vel,
+                                max_acc=max_acc,
+                                max_jerk=max_jerk,
+                            )
+
+                            self.get_logger().info(
+                                f"{robot.prefix} started Ruckig trajectory with "
+                                f"{path_xyz.shape[0]} waypoints"
+                            )
+
                     except Exception as e:
                         self.get_logger().error(f"Planner failed, {e}")
                         k_planner.planned_result = {

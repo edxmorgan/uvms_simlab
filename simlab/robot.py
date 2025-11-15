@@ -37,7 +37,8 @@ from std_msgs.msg import Float64MultiArray
 from controller_msg import FullRobotMsg
 from controllers import LowLevelController
 from planner_markers import PathPlanner
-    
+from cartesian_ruckig import CartesianRuckig
+
 class PS4Controller(Controller):
     def __init__(self, ros_node, prefix, **kwargs):
         super().__init__(**kwargs)
@@ -494,8 +495,10 @@ class Robot(Base):
                   record=False,  
                   controller='pid'):
         self.planner: PathPlanner = None
+        self.cart_traj: CartesianRuckig = None
         self.menu_handle = None
         self.final_goal = None
+        self.yaw_blend_factor = 0.0
         self.subscription = node.create_subscription(
                 DynamicJointState,
                 'dynamic_joint_states',
@@ -670,35 +673,28 @@ class Robot(Base):
         self.mocap_latest = [float(p.x), float(p.y), float(p.z),
                             float(q.w), float(q.x), float(q.y), float(q.z)]
 
-    def compute_manifold_errors(self):
+    def compute_errors(self):
         st = self.get_state()
-
         goal_xyz, goal_quat_xyz = self.final_goal
-
         X_goal_des = list(goal_xyz) + list(goal_quat_xyz)
-
         # vehicle part
         X_curr = np.asarray(st["pose"], dtype=float)
         X_wp_des  = np.asarray(self.pose_command, dtype=float)
 
-        def rpy_to_xyzw(rpy):
-            return R.from_euler("xyz", rpy, degrees=False).as_quat()
+        err_wp = (X_wp_des - X_curr)
+        err_wp_trans = np.abs(err_wp[:3])
+        err_wp__rotation = np.abs(err_wp[3:])
 
-        err_wp_se3 = (X_wp_des - X_curr)
-        err_wp_se3_trans = np.abs(err_wp_se3[:3])
-        err_wp_se3_rotation = np.abs(err_wp_se3[3:])
+        err_goal = (X_goal_des - X_curr)
+        err_goal_trans = np.abs(err_goal[:3])
+        err_goal_rotation = np.abs(err_goal[3:])
 
-        err_goal_se3 = (X_goal_des - X_curr)
-        err_goal_se3_trans = np.abs(err_goal_se3[:3])
-        err_goal_se3_rotation = np.abs(err_goal_se3[3:])
-
-        # manipulator part, build S1 objects, subtract per joint, then extract scalar tangent
+        # manipulator part, subtract per joint
         q_curr = np.asarray(st["q"], dtype=float).tolist()
         q_des  = np.asarray(self.arm.q_command, dtype=float).tolist()
 
-        err_s1 = [np.abs((Xd - Xc)) for Xd, Xc in zip(q_des, q_curr)]  # list of S1Tangent
-
-        return err_wp_se3_trans, err_wp_se3_rotation, err_s1 , err_goal_se3_trans, err_goal_se3_rotation
+        err_joints = [np.abs((Xd - Xc)) for Xd, Xc in zip(q_des, q_curr)]
+        return err_wp_trans, err_wp__rotation, err_joints , err_goal_trans, err_goal_rotation
 
     def start_joystick(self, device_interface):
         # Shared variables updated by the PS4 controller callbacks.
@@ -863,23 +859,28 @@ class Robot(Base):
         self.trajectory_path_publisher.publish(tra_path_msg)
 
 
-    def orient_towards_velocity(self):
+    def orient_towards_velocity(self, speed_threshold: float = 0.03):
         """
-        Orient the robot to face the direction of its current positive velocity.
-        This updates the robot's reference orientation based on its body velocity.
+        Return a yaw that points along the current horizontal velocity.
+        If the vehicle is moving slower than speed_threshold, do not change yaw.
         """
-        vx = self.ned_vel[0]
-        vy = self.ned_vel[1]
-        # Threshold to avoid undefined behavior when velocity is near zero
-        velocity_threshold = 1e-12
-        desired_yaw = np.arctan2(vy, vx + velocity_threshold)
+        vx = float(self.ned_vel[0])
+        vy = float(self.ned_vel[1])
 
-        # -- Get the CURRENT yaw from the last pose in trajectory_poses
-        current_yaw = self.ned_pose[5]
-        # -- Compute the shortest-path yaw
-        adjusted_yaw = self.normalize_angle(desired_yaw, current_yaw)
-        # self.node.get_logger().info(f"Orienting towards velocity:current yaw={current_yaw} radians  desired yaw={desired_yaw} radians adjusted yaw={adjusted_yaw} radians")
-        return adjusted_yaw
+        # Only use translational velocity here
+        linear_speed = np.hypot(vx, vy)
+
+        current_yaw = float(self.ned_pose[5])
+
+        # If we are basically not translating, keep current yaw
+        if linear_speed < speed_threshold:
+            return current_yaw
+
+        # Otherwise compute the yaw that faces the velocity direction
+        desired_yaw = np.arctan2(vy, vx)
+
+        # Smooth shortest path from current to desired
+        return self.normalize_angle(desired_yaw, current_yaw)
 
     def normalize_angle(self, desired_yaw, current_yaw):
         # Compute the smallest angular difference
