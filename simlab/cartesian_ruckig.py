@@ -79,10 +79,13 @@ class CartesianRuckig:
     def update(self, yaw_blend_factor):
         """Advance one control step along the current trajectory."""
         if not self.active:
-            return None, Result.Error
+            return None, None, None, Result.Error
 
         res = self.otg.update(self.inp, self.out)
         pos = list(self.out.new_position)
+        vel = list(self.out.new_velocity)
+        acc = list(self.out.new_acceleration)
+
         self.out.pass_to_input(self.inp)
 
         if self.out.new_calculation:
@@ -95,5 +98,5 @@ class CartesianRuckig:
             self.rclpy_node.get_logger().info("Ruckig trajectory finished")
             self.active = False
 
-        return pos, res
+        return pos, vel, acc, res
 

@@ -13,30 +13,7 @@ except Exception as e:
     ) from e
 
 
-def _compute_bounds_from_fcl(fcl_world: FCLWorld, z_min, pad_xy=0.5, pad_z=1e-4):
-    """
-    Compute planner bounds from FCL world's AABB, with a small padding.
-    If fcl_world is None or does not have min_coords, fall back to a large box.
-    """
-    if fcl_world is None or not hasattr(fcl_world, "min_coords") or fcl_world.min_coords is None:
-        # fallback to previous large bounds
-        return (
-            -10000.0, 10000.0,   # x
-            -10000.0, 10000.0,   # y
-            -10000.0, 0.0,       # z
-        )
 
-    min_c = np.asarray(fcl_world.min_coords, float)
-    max_c = np.asarray(fcl_world.max_coords, float)
-
-    x_min = float(min_c[0] - pad_xy)
-    x_max = float(max_c[0] + pad_xy)
-    y_min = float(min_c[1] - pad_xy)
-    y_max = float(max_c[1] + pad_xy)
-
-    z_max = 0.0 + pad_z
-
-    return x_min, x_max, y_min, y_max, z_min, z_max
 
 
 def _resample_by_distance(xyz_np, quat_np, spacing_m=0.20, max_points=2000):
@@ -119,7 +96,7 @@ def _get_path_length_objective(si: ob.SpaceInformation, threshold: float | None 
 
 
 def plan_se3_path(
-    rclpy_node,
+    rclpy_node: Node,
     start_xyz,
     start_quat_wxyz,
     goal_xyz,
@@ -137,10 +114,7 @@ def plan_se3_path(
     space = ob.SE3StateSpace()
 
     # Bounds from FCL world AABB plus padding
-    x_min, x_max, y_min, y_max, z_min, z_max = _compute_bounds_from_fcl(
-        rclpy_node.fcl_world,
-        rclpy_node.bottom_z,
-    )
+    x_min, x_max, y_min, y_max, z_min, z_max = rclpy_node.fcl_world._compute_bounds_from_fcl(rclpy_node.bottom_z)
 
     rclpy_node.get_logger().info(
         f"Planner bounds x[{x_min:.2f}, {x_max:.2f}], "

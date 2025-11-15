@@ -45,6 +45,23 @@ class FCLWorld:
         self._planner_geom = fcl.Sphere(self.vehicle_radius)
         self._planner_obj  = fcl.CollisionObject(self._planner_geom, fcl.Transform())
 
+    def _compute_bounds_from_fcl(self, z_min, pad_xy=0.5, pad_z=1e-4):
+        """
+        Compute planner bounds from FCL world's AABB, with a small padding.
+        If fcl_world is None or does not have min_coords, fall back to a large box.
+        """
+        min_c = np.asarray(self.min_coords, float)
+        max_c = np.asarray(self.max_coords, float)
+
+        x_min = float(min_c[0] - pad_xy)
+        x_max = float(max_c[0] + pad_xy)
+        y_min = float(min_c[1] - pad_xy)
+        y_max = float(max_c[1] + pad_xy)
+
+        z_max = 0.0 + pad_z
+
+        return x_min, x_max, y_min, y_max, z_min, z_max
+
     # --------------- structure helpers ---------------
 
     def _build_fcl_bodies(self, link_list, kind: str):

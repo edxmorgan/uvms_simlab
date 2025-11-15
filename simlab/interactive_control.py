@@ -262,9 +262,6 @@ class BasicControlsNode(Node):
 
             state = robot.get_state()
             if state['status'] == 'active':
-                desired_body_acc = robot.body_acc_command + robot.arm.ddq_command
-                desired_body_vel = robot.body_vel_command + robot.arm.dq_command
-
                 if robot.final_goal is not None and k_planner.planned_result and k_planner.planned_result['status']:
                     # Convert once to NumPy arrays
                     path_xyz = np.asarray(k_planner.planned_result["xyz"], dtype=float)
@@ -284,7 +281,7 @@ class BasicControlsNode(Node):
                     # Get the velocity-based yaw.
                     adjusted_yaw = robot.orient_towards_velocity()
 
-                    pos_nwu, res = robot.cart_traj.update(robot.yaw_blend_factor)
+                    pos_nwu, vel_nwu, acc_nwu, res = robot.cart_traj.update(robot.yaw_blend_factor)
 
                     if pos_nwu is not None:
                         target_nwu = np.asarray(pos_nwu, dtype=float)
@@ -320,8 +317,7 @@ class BasicControlsNode(Node):
                         ]
 
 
-                    robot.arm.q_command = [self.q0_des, self.q1_des, self.q2_des, self.q3_des]
-                                            
+                    robot.arm.q_command = [self.q0_des, self.q1_des, self.q2_des, self.q3_des]                        
 
             veh_state_vec = np.array(
                 list(state['pose']) + list(state['body_vel']),
@@ -404,10 +400,20 @@ class BasicControlsNode(Node):
         # For uv_marker
         if feedback.marker_name == "uv_marker":
             if feedback.pose:
-                if feedback.pose.position.z > 0.0:
-                    feedback.pose.position.z = 0.0
+                x_min, x_max, y_min, y_max, z_min, z_max = self.fcl_world._compute_bounds_from_fcl(z_min=self.bottom_z, pad_xy=0.0, pad_z=0.0)
+                pos = feedback.pose.position
+
+                xyz = np.array([pos.x, pos.y, pos.z], dtype=float)
+                mins = np.array([x_min, y_min, z_min], dtype=float)
+                maxs = np.array([x_max, y_max, z_max], dtype=float)
+
+                clipped_xyz = np.clip(xyz, mins, maxs)
+
+                if not np.array_equal(xyz, clipped_xyz):
+                    pos.x, pos.y, pos.z = clipped_xyz.tolist()
                     self.server.setPose(feedback.marker_name, feedback.pose)
                     self.server.applyChanges()
+
                 self.current_target_vehicle_marker_pose = feedback.pose
             if feedback.event_type == InteractiveMarkerFeedback.MENU_SELECT:
                 if feedback.menu_entry_id == self.execute_handle:
