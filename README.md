@@ -14,7 +14,7 @@ A field-ready ROS 2 lab for **Underwater Vehicle–Manipulator Systems**. `uvms_
 
 ## Requirements
 
-- ROS 2 Humble (or newer) plus the [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) stack installed exactly as documented in its README (system packages, `vcs import`, `rosdep`, CasADi, etc.).
+- ROS 2 jazzy plus the [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) stack installed exactly as documented in its README (system packages, `vcs import`, `rosdep`, CasADi, etc.).
 - Python deps: `pyPS4Controller`, `pynput`, `scipy`, `casadi`, `pandas`.
 - OMPL with Python bindings (`install-ompl-ubuntu.sh --python` from Kavraki Lab works well).
 - Optional hardware: BlueROV2 Heavy + Reach Alpha 5 + Blue Robotics A50 DVL (or any robot stack you map through the provided interfaces).
