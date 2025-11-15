@@ -1,33 +1,44 @@
 # uvms_simlab 🚀
 
-Your plug-and-play lab for **Underwater Vehicle–Manipulator Systems**. `uvms_simlab` layers interactive control, collision-aware planning, and hardware-ready tooling on top of [uvms-simulator](https://github.com/edxmorgan/uvms-simulator). If you’re prototyping underwater manipulation or HIL experiments, star the repo and dive in!
+A field-ready ROS 2 lab for **Underwater Vehicle–Manipulator Systems**. `uvms_simlab` layers interactive teleoperation, collision-aware planning, and hardware-in-the-loop tooling on top of [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) so you can go from concept to wet tests without rebuilding infrastructure.
 
-<!-- ![UVMS SimLab](https://raw.githubusercontent.com/edxmorgan/uvms-simulator/main/doc/uvms_env.png) -->
 
-## Why teams love uvms_simlab ⭐
+## Highlights
 
-- 🌀🖱️ **Drag-and-drive RViz controls** – steer the vehicle or end-effector directly with 6‑DoF markers.
-- 🤖 **Continuous self-collision checking** – convex hull + FCL narrow-phase keeps the manipulator safe.
-- 🗺️ **SE(3) planning & visualization** – plan coverage paths with OMPL and stream waypoints live.
-- 🎮 **PS4/Joy teleop & HIL switches** – toggle between simulation and hardware with launch args.
-- 📡 **Rich visualization suite** – workspace clouds, vehicle hulls, path trails, and marker menus baked in.
-- 📓 **Data logging hooks** – CSV logs per robot for ML datasets or controller tuning.
+- 🌀🖱️ **Direct RViz manipulation** – 6‑DoF interactive markers drive the vehicle body or end-effector without custom plugins.
+- 🤖 **Continuous self-collision monitoring** – convex-hull broad phase backed by FCL keeps the arm safe during planning and teleop.
+- 🗺️ **SE(3) planning with live visualization** – OMPL planners stream candidate paths, coverage sweeps, and executed waypoints to RViz.
+- 🎮 **Controller flexibility** – PS4/joy teleop, PID controllers, or your own ROS 2 nodes can be swapped via launch arguments.
+- 📡 **Visualization overlays** – vehicle hulls, workspace clouds, goal menus, and path trails are preconfigured for situational awareness.
+- 📓 **Data logging hooks** – CSV logs per robot make it easy to build ML datasets or audit controllers.
+
+## Requirements
+
+- ROS 2 Humble (or newer) plus the [uvms-simulator](https://github.com/edxmorgan/uvms-simulator) stack installed exactly as documented in its README (system packages, `vcs import`, `rosdep`, CasADi, etc.).
+- Python deps: `pyPS4Controller`, `pynput`, `scipy`, `casadi`, `pandas`.
+- OMPL with Python bindings (`install-ompl-ubuntu.sh --python` from Kavraki Lab works well).
+- Optional hardware: BlueROV2 Heavy + Reach Alpha 5 + Blue Robotics A50 DVL (or any robot stack you map through the provided interfaces).
 
 ## Quick start ⚡
 
-```bash
-sudo pip install pyPS4Controller pynput scipy casadi pandas
-wget https://ompl.kavrakilab.org/install-ompl-ubuntu.sh
-chmod u+x install-ompl-ubuntu.sh
-./install-ompl-ubuntu.sh --python
+1. **Install uvms-simulator and dependencies**  
+   Follow the [uvms-simulator installation guide](https://github.com/edxmorgan/uvms-simulator/blob/main/README.md). 
 
-cd ~/ros2_ws/src
-git clone https://github.com/edxmorgan/uvms-simulator.git
-git clone https://github.com/edxmorgan/uvms_simlab.git
-cd ..
-colcon build --packages-select uvms-simulator simlab
-source install/setup.bash
-```
+2. **Add uvms_simlab and planning extras**
+
+   ```bash
+   cd ~/ros2_ws/src
+   git clone https://github.com/edxmorgan/uvms_simlab.git
+
+   sudo pip install pyPS4Controller pynput scipy casadi pandas
+   wget https://ompl.kavrakilab.org/install-ompl-ubuntu.sh
+   chmod u+x install-ompl-ubuntu.sh
+   ./install-ompl-ubuntu.sh --python
+
+   cd ..
+   colcon build
+   source install/setup.bash
+   ```
 
 ## Launch recipes 🚢
 
@@ -53,7 +64,7 @@ ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
     gui:=false task:=manual record_data:=true
 ```
 
-> 💡 Hardware swap: set `use_vehicle_hardware:=true` and `use_manipulator_hardware:=true` to drop your BlueROV2 Heavy + Reach Alpha 5 directly into the loop.
+> 💡 Hardware swap: set `use_vehicle_hardware:=true` and `use_manipulator_hardware:=true` to put your BlueROV2 Heavy, Reach Alpha 5, and A50 DVL directly into the loop.
 
 ## Project layout 🧭
 
@@ -68,4 +79,4 @@ simlab/
 
 ## Contributing & community 🤝
 
-Have a new planner, sensor, or teleop idea? I’d love to merge it.
+Have a planner, sensor, or teleop workflow that should live here? Open an issue or PR
