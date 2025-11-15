@@ -2,7 +2,7 @@
 
 Your plug-and-play lab for **Underwater Vehicle–Manipulator Systems**. `uvms_simlab` layers interactive control, collision-aware planning, and hardware-ready tooling on top of [uvms-simulator](https://github.com/edxmorgan/uvms-simulator). If you’re prototyping underwater manipulation or HIL experiments, star the repo and dive in!
 
-![UVMS SimLab](https://raw.githubusercontent.com/edxmorgan/uvms-simulator/main/doc/uvms_env.png)
+<!-- ![UVMS SimLab](https://raw.githubusercontent.com/edxmorgan/uvms-simulator/main/doc/uvms_env.png) -->
 
 ## Why teams love uvms_simlab ⭐
 
@@ -50,7 +50,7 @@ ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
 
 ```bash
 ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
-    gui:=false task:=planner record_data:=true
+    gui:=false task:=manual record_data:=true
 ```
 
 > 💡 Hardware swap: set `use_vehicle_hardware:=true` and `use_manipulator_hardware:=true` to drop your BlueROV2 Heavy + Reach Alpha 5 directly into the loop.
@@ -63,7 +63,7 @@ simlab/
 ├── simlab/robot.py                 # Robot wrapper, logging, command mux
 ├── simlab/fcl_checker.py           # Collision environment utilities
 ├── simlab/interactive_utils.py     # Marker helpers & viz utilities
-└── resource/                       # RViz configs, meshes, assets
+└── resource/                       # models
 ```
 
 ## Contributing & community 🤝
