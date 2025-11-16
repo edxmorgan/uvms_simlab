@@ -183,23 +183,6 @@ def get_broadcast_tf(stamp, pose, parent_frame, child_frame):
     t.transform.rotation = pose.orientation
     return t
 
-
-def dm_to_pose(dm):
-    pose = Pose()
-    pose.position.x = float(dm[0])
-    pose.position.y = float(dm[1])
-    pose.position.z = float(dm[2])
-    roll = float(dm[3])
-    pitch = float(dm[4])
-    yaw = float(dm[5])
-    q = R.from_euler('xyz', [roll, pitch, yaw]).as_quat()
-    pose.orientation.x = q[0]
-    pose.orientation.y = q[1]
-    pose.orientation.z = q[2]
-    pose.orientation.w = q[3]
-    return pose
-
-
 def pose_to_homogeneous(pose):
     """Convert a geometry_msgs/Pose into a 4x4 homogeneous transformation matrix."""
     quat = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]

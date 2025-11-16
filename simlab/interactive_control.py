@@ -126,10 +126,10 @@ class BasicControlsNode(Node):
         self.selected_robot_index = 0 # by default robot 0 is selected
 
         self.arm_base_pose = Pose()
-        self.arm_base_pose.position.x = 0.19
-        self.arm_base_pose.position.y = 0.0
-        self.arm_base_pose.position.z = -0.12
-        r = R.from_euler('xyz', [3.142, 0.0, 0.0])
+        self.arm_base_pose.position.x = alpha.base_T0_new[0]
+        self.arm_base_pose.position.y = alpha.base_T0_new[1]
+        self.arm_base_pose.position.z = alpha.base_T0_new[2]
+        r = R.from_euler('xyz', alpha.base_T0_new[3:6])
         q = r.as_quat()
         (self.arm_base_pose.orientation.x,
          self.arm_base_pose.orientation.y,
@@ -206,18 +206,29 @@ class BasicControlsNode(Node):
         # Unpack the Euler angles from the returned array.
         roll, pitch, yaw = R.from_quat(desired_q_orientation).as_euler('xyz', degrees=False)
         [self.q0_des, self.q1_des, self.q2_des, self.q3_des] = self.robots[0].arm.q_command
-        self.n_int_est = ca.DM([self.current_target_vehicle_marker_pose.position.x,
+        initial_world_pose = ca.DM([self.current_target_vehicle_marker_pose.position.x,
                       self.current_target_vehicle_marker_pose.position.y,
                       self.current_target_vehicle_marker_pose.position.z,
                       roll,
                       pitch,
-                      yaw,
-                      self.q0_des,
-                      self.q1_des,
-                      self.q2_des, 
-                      self.q3_des])
-        temp_dm = Robot.uvms_Forward_kinematics(self.n_int_est, alpha.base_T0)
-        self.last_valid_task_pose = dm_to_pose(temp_dm[4])
+                      yaw])
+        
+        initial_joint_q = ca.DM([self.q0_des,self.q1_des,self.q2_des,self.q3_des])
+
+        joints_and_endeffector_poses = Robot.uvms_Forward_kinematics(
+            initial_joint_q, alpha.base_T0_new, initial_world_pose
+        )
+
+        ee = np.array(joints_and_endeffector_poses[-1].full(), dtype=float).ravel()
+
+        self.last_valid_task_pose = Pose()
+        self.last_valid_task_pose.position.x, \
+        self.last_valid_task_pose.position.y, \
+        self.last_valid_task_pose.position.z = ee[:3].tolist()
+        self.last_valid_task_pose.orientation.w, \
+        self.last_valid_task_pose.orientation.x, \
+        self.last_valid_task_pose.orientation.y, \
+        self.last_valid_task_pose.orientation.z = ee[3:7].tolist()
 
         self.task_marker = make_UVMS_Dof_Marker(
             name='task_marker',

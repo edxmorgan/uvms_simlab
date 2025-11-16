@@ -663,8 +663,8 @@ class Robot(Base):
             self.node.get_logger().info(f"No joystick device found for robot {self.k_robot}.")
     
     @classmethod
-    def uvms_Forward_kinematics(cls, wb_states, base_T0):
-        return cls.fk_eval_cls(wb_states, base_T0)
+    def uvms_Forward_kinematics(cls, joint_qx, base_T0, world_pose):
+        return cls.fk_eval_cls(joint_qx, base_T0, world_pose)
     
     def _mocap_pose_cb(self, msg: PoseStamped):
         p = msg.pose.position
