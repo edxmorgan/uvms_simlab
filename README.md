@@ -54,7 +54,7 @@ ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
 
 ```bash
 ros2 launch ros2_control_blue_reach_5 robot_system_multi_interface.launch.py \
-    task:=manual controllers:=pid
+    task:=manual
 ```
 
 **Headless data collection**
