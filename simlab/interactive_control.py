@@ -241,7 +241,7 @@ class BasicControlsNode(Node):
             scale=0.2,
             arm_base_pose=self.arm_base_pose,
             show_6dof=True,
-            ignore_dof=['yaw']
+            ignore_dof=[]
         )
 
         self.server.insert(self.task_marker)

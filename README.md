@@ -7,7 +7,7 @@ A field-ready ROS 2 lab for **Underwater Vehicle–Manipulator Systems**. `uvms_
 
 - 🌀🖱️ **Direct RViz manipulation** – 6‑DoF interactive markers drive the vehicle body or end-effector without custom plugins.
 - 🤖 **Continuous self-collision monitoring** – convex-hull broad phase backed by FCL keeps the arm safe during planning and teleop.
-- 🗺️ **SE(3) planning with live visualization** – OMPL planners stream candidate paths, coverage sweeps, and executed waypoints to RViz.
+- 🗺️ **SE(3) planning with live visualization** – OMPL + Ruckig planners stream candidate paths, coverage sweeps, and executed waypoints to RViz.
 - 🎮 **Controller flexibility** – PS4/joy teleop, PID controllers, or your own ROS 2 nodes can be swapped via launch arguments.
 - 📡 **Visualization overlays** – vehicle hulls, workspace clouds, goal menus, and path trails are preconfigured for situational awareness.
 - 📓 **Data logging hooks** – CSV logs per robot make it easy to build ML datasets or audit controllers.
