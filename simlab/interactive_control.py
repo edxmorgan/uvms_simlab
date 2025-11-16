@@ -345,6 +345,7 @@ class BasicControlsNode(Node):
                 dt=state["dt"],
                 u_max=alpha.u_max,
                 u_min=alpha.u_min,
+                model_param=alpha.sim_p,
             )
 
             arm_tau_list = list(np.asarray(cmd_arm_tau, dtype=float).reshape(-1))

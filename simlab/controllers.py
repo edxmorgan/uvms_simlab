@@ -37,7 +37,6 @@ class LowLevelController:
         self.arm_pid_controller = ca.Function.load(arm_pid_controller_path)
         self.arm_dof = int(arm_dof)
         self.arm_pid_i_buffer = np.zeros(self.arm_dof, dtype=float)  # arm integral buffer
-        self.g_ff = [0,0,0,0]  # feedforward gravity compensation
 
         self.vehicle_model_params = [3.72028553e+01, 2.21828075e+01, 6.61734807e+01, 3.38909801e+00,
                                   6.41362046e-01, 6.41362034e-01, 3.38909800e+00, 1.39646394e+00,
@@ -100,6 +99,7 @@ class LowLevelController:
         dt: float,
         u_max: np.ndarray,
         u_min: np.ndarray,
+        model_param: np.ndarray,
     ) -> np.ndarray:
         """
         Compute arm joint torques with the simple PID CasADi function you built.
@@ -136,9 +136,9 @@ class LowLevelController:
             ca.DM(Kd),
             ca.DM(buf),
             float(dt),
-            ca.DM(self.g_ff),
             ca.DM(u_max),
             ca.DM(u_min),
+            ca.DM(model_param)
         )
 
         self.arm_pid_i_buffer = np.asarray(buf_next).reshape(-1)[: self.arm_dof]
