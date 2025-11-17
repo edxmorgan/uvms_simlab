@@ -143,7 +143,11 @@ class BasicControlsNode(Node):
         self.menu_id_to_robot_index = {}
 
         self.execute_handle = self.menu_handler.insert("Plan & execute", callback=self.processFeedback)
-        sub_menu_handle = self.menu_handler.insert("Robots")
+        robot_select_menu_handle = self.menu_handler.insert("Robots")
+        pick_handle = self.menu_handler.insert("Mark pick target")
+        place_handle = self.menu_handler.insert("Mark place target")
+        run_pick_place = self.menu_handler.insert("Run pick & place")
+        # phases: MOVE_TO_PICK_APPROACH ->LOWER_AND_GRASP -> RETRACT -> MOVE_TO_PLACE_APPROACH -> LOWER_AND_RELEASE -> RETRACT.
 
         self.control_frequency = 500.0  # Hz
         self.viz_frequency = 10.0       # Hz
@@ -169,7 +173,7 @@ class BasicControlsNode(Node):
             robot_k.planner = PathPlanner(self, ns=f"planner/{prefix}", base_id=k)
 
             # add a menu item for this robot and remember which handle maps to which index
-            h = self.menu_handler.insert(f"Use {prefix}", parent=sub_menu_handle, callback=self.processFeedback)
+            h = self.menu_handler.insert(f"Use {prefix}", parent=robot_select_menu_handle, callback=self.processFeedback)
             self.menu_id_to_robot_index[h] = k
 
             self.robots.append(robot_k)
