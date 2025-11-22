@@ -243,7 +243,7 @@ class BasicControlsNode(Node):
             interaction_mode=InteractiveMarkerControl.MOVE_ROTATE_3D,
             initial_pose=self.last_valid_task_pose,
             scale=0.2,
-            arm_base_pose=self.arm_base_pose,
+            arm_base_pose=None,
             show_6dof=True,
             ignore_dof=[]
         )
@@ -256,9 +256,6 @@ class BasicControlsNode(Node):
         self.uv_marker.controls.append(copy.deepcopy(menu_control))
         self.menu_handler.apply(self.server, self.uv_marker.name)
         self.server.applyChanges()
-
-        self.header = Header()
-        self.header.frame_id = self.vehicle_marker_frame
 
         self.control_timer = self.create_timer(1.0 / self.control_frequency, self.timer_callback)
         self.viz_timer = self.create_timer(1.0 / self.viz_frequency, self.viz_timer_callback)
@@ -543,9 +540,13 @@ class BasicControlsNode(Node):
             if is_point_valid(self.workspace_hull, self.vehicle_body_hull, task_point):
                 self.last_valid_task_pose = feedback.pose
                 relative_pose = get_relative_pose(self.arm_base_pose, self.last_valid_task_pose)
-                self.q0_des, self.q1_des, self.q2_des = self.robots[self.selected_robot_index].arm.ik_solver([
-                    relative_pose.position.x, relative_pose.position.y, relative_pose.position.z
-                ], pose="underarm")
+
+                q_ik_sol = Robot.uvms_body_inverse_kinematics(
+                    np.array([relative_pose.position.x, relative_pose.position.y, relative_pose.position.z]))
+                
+
+                [self.q0_des, self.q1_des, self.q2_des] = q_ik_sol
+                
                 self.get_logger().debug(
                     f"Task marker updated with IK: {self.q0_des, self.q1_des, self.q2_des, self.q3_des}"
                 )

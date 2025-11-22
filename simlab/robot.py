@@ -370,22 +370,6 @@ class Manipulator(Base):
 
         self.joints = [self.alpha_axis_e, self.alpha_axis_d, self.alpha_axis_c, self.alpha_axis_b]
 
-
-        self.a0 = 20e-3
-        self.a1 = np.sqrt(40**2 + (154.3)**2)*(10**-3)
-        self.a2 = 20e-3
-        self.a3 = 0
-        self.a4 = 0
-        
-        self.d0 = 46.2e-3
-        self.d1 = 0
-        self.d2 = 0
-        self.d3 = -180e-3
-        self.d4 = 0
-        
-        self.l1 = self.a1
-        self.l2 = np.sqrt(self.a2**2 + self.d3**2)
-
         self.q_command = [3.1, 0.7, 0.4, 2.1]
         self.dq_command = [0.0, 0.0, 0.0, 0.0]
         self.ddq_command = [0.0, 0.0, 0.0, 0.0]
@@ -436,57 +420,6 @@ class Manipulator(Base):
             'dt':self.sim_period[0]
         }
 
-    def ik_solver(self, target_position, pose="overarm"):
-        x = target_position[0]
-        y = target_position[1]
-        z = target_position[2]
-
-        thet0, thet1, thet2 = float("nan"), float("nan"), float("nan")
-        try:
-            R = np.sqrt(x**2 + y**2)
-            l1 = self.a1
-            l2 = np.sqrt(self.a2**2 + self.d3**2)
-
-            if pose == 'underarm':
-                thet0 = np.arctan2(y, x) + np.pi
-                l3 = np.sqrt((R - self.a0)**2 + (z - self.d0)**2)
-                
-                # Compute argument for arccos and arcsin safely by clipping
-                arg1 = (l1**2 + l2**2 - l3**2) / (2 * l1 * l2)
-                term1 = np.arccos(np.clip(arg1, -1, 1))
-                
-                term2 = np.arcsin(np.clip((2 * self.a2) / l1, -1, 1))
-                term3 = np.arcsin(np.clip(self.a2 / l2, -1, 1))
-                
-                thet2 = term1 - term2 - term3
-
-                arg2 = (l1**2 + l3**2 - l2**2) / (2 * l1 * l3)
-                term4 = np.arccos(np.clip(arg2, -1, 1))
-                
-                thet1 = (np.pi / 2) + np.arctan2(z - self.d0, R - self.a0) - term4 - term2
-
-            elif pose == 'overarm':
-                thet0 = np.arctan2(y, x)
-                l3 = np.sqrt((R + self.a0)**2 + (z - self.d0)**2)
-                
-                arg1 = (l1**2 + l2**2 - l3**2) / (2 * l1 * l2)
-                term1 = np.arccos(np.clip(arg1, -1, 1))
-                
-                term2 = np.arcsin(np.clip((2 * self.a2) / l1, -1, 1))
-                term3 = np.arcsin(np.clip(self.a2 / l2, -1, 1))
-                
-                thet2 = term1 - term2 - term3
-
-                arg2 = (l1**2 + l3**2 - l2**2) / (2 * l1 * l3)
-                term4 = np.arccos(np.clip(arg2, -1, 1))
-                
-                thet1 = ((3 * np.pi) / 2) - np.arctan2(z - self.d0, R + self.a0) - term4 - term2
-
-        except Exception as e:
-            self.node.get_logger().error(f"An error occurred: {e}")
-        return thet0, thet1, thet2
-
-
 class Robot(Base):
     def __init__(self, node: Node,
                   k_robot, 
@@ -526,13 +459,20 @@ class Robot(Base):
         package_share_directory = ament_index_python.get_package_share_directory(
                 'simlab')
         fk_path = os.path.join(package_share_directory, 'manipulator/fk_eval.casadi')
+        ik_path = os.path.join(package_share_directory, 'manipulator/ik_eval.casadi')
 
         vehicle_J_path = os.path.join(package_share_directory, 'vehicle/J_uv.casadi')
 
-        self.fk_eval = ca.Function.load(fk_path) # differential inverse kinematics
+        self.fk_eval = ca.Function.load(fk_path) #  forward kinematics
         # also set a class attribute fk_eval so it can be shared
         if not hasattr(Robot, "fk_eval_cls"):
             Robot.fk_eval_cls = self.fk_eval
+
+        self.ik_eval = ca.Function.load(ik_path) #  inverse kinematics
+        # also set a class attribute ik_eval so it can be shared
+        if not hasattr(Robot, "ik_eval_cls"):
+            Robot.ik_eval_cls = self.ik_eval
+
         self.vehicle_J = ca.Function.load(vehicle_J_path)
         self.node = node
         self.sensors = [
@@ -665,6 +605,10 @@ class Robot(Base):
     @classmethod
     def uvms_Forward_kinematics(cls, joint_qx, base_T0, world_pose):
         return cls.fk_eval_cls(joint_qx, base_T0, world_pose)
+
+    @classmethod
+    def uvms_body_inverse_kinematics(cls, target_position):
+        return cls.ik_eval_cls(target_position).full().flatten().tolist()
     
     def _mocap_pose_cb(self, msg: PoseStamped):
         p = msg.pose.position
